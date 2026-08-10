@@ -34,11 +34,12 @@ request instead (it already renders the full conversation anyway).
 
 Image serving differs from a "one image per page" scheme: a page here can
 carry ZERO, ONE, or SEVERAL cropped diagrams (pdf_loader.py's precise
-per-diagram extraction, not a whole-page render), so chain.py's
-first_image_paths() returns a LIST of real file paths. To match the
-reference UI's one-image-per-answer design, this file shows only the first
-of those, turned into a URL by path rather than by reconstructing one from
-chapter+page.
+per-diagram extraction, not a whole-page render). chain.py's
+select_best_image_path() already resolves that down to the single diagram
+whose own caption best matches the question (not just "whichever file is
+listed first" -- a page with several unrelated diagrams used to always show
+the same one regardless of the question); this file just turns that one
+path into a URL, by path rather than by reconstructing one from chapter+page.
 """
 
 import json

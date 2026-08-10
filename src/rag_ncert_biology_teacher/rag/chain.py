@@ -33,10 +33,14 @@ FLOW
 
 A retrieved chunk's `image_paths` metadata (chunking.py, Step 5) is a
 JSON-encoded list -- a page can carry zero, one, or several diagrams, unlike
-a "one image per page" scheme. `first_image_paths()` below scans the
-retrieved chunks in relevance order and returns the first page's images
-found, so a caller (the Flask UI) can display them without needing to know
-this JSON-encoding detail itself.
+a "one image per page" scheme, and EVERY chunk split from that page carries
+the SAME full list (chunking.py attaches images per-PAGE, before splitting).
+When a page has more than one diagram, that list alone can't say which one
+the question is actually about -- `select_best_image_path()` below resolves
+that by re-ranking that page's (deduplicated) candidate images against the
+QUESTION using each image's own cached caption, and returns just the one
+best match, so a caller (the Flask UI) never has to guess by taking
+"whichever path happens to be listed first."
 
 LOGIC / MECHANISM
 ------------------
@@ -62,7 +66,14 @@ import json
 
 from google import genai
 
-from rag_ncert_biology_teacher.config import GOOGLE_CLOUD_LOCATION, GOOGLE_CLOUD_PROJECT, LLM_MODEL, RAW_PDF_DIR
+from rag_ncert_biology_teacher.config import (
+    EXTRACTED_DIR,
+    GOOGLE_CLOUD_LOCATION,
+    GOOGLE_CLOUD_PROJECT,
+    LLM_MODEL,
+    RAW_PDF_DIR,
+)
+from rag_ncert_biology_teacher.indexing.embeddings import embed_texts
 from rag_ncert_biology_teacher.rag.prompts import (
     TEACHER_SYSTEM_PROMPT,
     format_chapter_list,
@@ -135,16 +146,65 @@ def _generate_stream(prompt: str):
 _MARKER_HOLD_BACK = 60
 
 
-def first_image_paths(chunks) -> list[str]:
-    """Scan retrieved chunks in relevance order, return the first page's
-    image paths found (parsed back out of chunking.py's JSON-encoded
-    metadata). [] if none of the chunks have any diagram at all.
+# {chapter_number: {image_path_str: caption}} -- loaded once per chapter from
+# the same caption_index.json cache captioning.py/chunking.py already write,
+# reused here purely for local lookup (no new Gemini captioning calls).
+_caption_cache: dict[int, dict[str, str]] = {}
+
+
+def _load_chapter_captions(chapter_number: int) -> dict[str, str]:
+    if chapter_number not in _caption_cache:
+        chapter_key = f"chapter_{chapter_number:02d}"
+        cache_path = EXTRACTED_DIR / "class12_biology" / chapter_key / "caption_index.json"
+        captions: dict[str, str] = {}
+        if cache_path.exists():
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            captions = {
+                path: entry["caption"] for path, entry in zip(data["image_paths"], data["entries"])
+            }
+        _caption_cache[chapter_number] = captions
+    return _caption_cache[chapter_number]
+
+
+def select_best_image_path(question: str, chunks) -> str | None:
+    """Among every diagram attached to the retrieved chunks, pick the ONE
+    whose own caption is the best semantic match for the question -- not
+    just the first path listed on the top chunk's page.
+
+    Why this exists: a page can carry several unrelated diagrams (e.g.
+    chapter 3 page 4 has both a condom diagram AND a Copper T diagram), and
+    chunking.py attaches that PAGE's full image list to every chunk split
+    from it. Naively taking image_paths[0] means whichever file sorts first
+    alphabetically always wins, regardless of the question -- found for real
+    asking about the Copper T and getting shown the condom instead. Ranking
+    each candidate's own caption against the question (reusing the same
+    embed_texts()/cosine-similarity approach already proven in
+    image_handling/caption_retrieval.py) fixes that directly.
     """
+    candidates: list[tuple[str, str]] = []  # [(image_path, caption), ...], deduplicated
+    seen: set[str] = set()
     for chunk in chunks:
         paths = json.loads(chunk.metadata.get("image_paths", "[]"))
-        if paths:
-            return paths
-    return []
+        if not paths:
+            continue
+        chapter_captions = _load_chapter_captions(chunk.metadata["chapter_number"])
+        for path in paths:
+            if path in seen:
+                continue
+            seen.add(path)
+            candidates.append((path, chapter_captions.get(path, "")))
+
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0][0]
+
+    # One batched call: [question, caption_1, caption_2, ...] -- cheap and
+    # only fires at all when a page genuinely has more than one candidate.
+    vectors = embed_texts([question] + [caption or path for path, caption in candidates])
+    question_vector, caption_vectors = vectors[0], vectors[1:]
+    best_index = int((caption_vectors @ question_vector).argmax())
+    return candidates[best_index][0]
 
 
 def ask_stream(
@@ -187,10 +247,13 @@ def ask_stream(
     # though we DID retrieve chunks (that's fine -- retrieval is cheap;
     # what matters is not showing sources for a reply that never used them).
     shown_chunks = chunks if grounded else []
+    best_image_path = (
+        select_best_image_path(question, shown_chunks) if (show_image and grounded) else None
+    )
     yield "meta", {
         "chunks": shown_chunks,
         "show_image": show_image and grounded,
-        "image_paths": first_image_paths(shown_chunks) if (show_image and grounded) else [],
+        "image_paths": [best_image_path] if best_image_path else [],
     }
 
 
