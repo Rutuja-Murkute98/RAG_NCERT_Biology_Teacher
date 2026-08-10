@@ -1,0 +1,17 @@
+{
+  "chapters": [
+    {"number": 1, "title": "Sexual Reproduction in Flowering Plants", "file": "chapter_01.pdf"},
+    {"number": 2, "title": "Human Reproduction", "file": "chapter_02.pdf"},
+    {"number": 3, "title": "Reproductive Health", "file": "chapter_03.pdf"},
+    {"number": 4, "title": "Principles of Inheritance and Variation", "file": "chapter_04.pdf"},
+    {"number": 5, "title": "Molecular Basis of Inheritance", "file": "chapter_05.pdf"},
+    {"number": 6, "title": "Evolution", "file": "chapter_06.pdf"},
+    {"number": 7, "title": "Human Health and Disease", "file": "chapter_07.pdf"},
+    {"number": 8, "title": "Microbes in Human Welfare", "file": "chapter_08.pdf"},
+    {"number": 9, "title": "Biotechnology: Principles and Processes", "file": "chapter_09.pdf"},
+    {"number": 10, "title": "Biotechnology and its Applications", "file": "chapter_10.pdf"},
+    {"number": 11, "title": "Organisms and Populations", "file": "chapter_11.pdf"},
+    {"number": 12, "title": "Ecosystem", "file": "chapter_12.pdf"},
+    {"number": 13, "title": "Biodiversity and Conservation", "file": "chapter_13.pdf"}
+  ]
+}

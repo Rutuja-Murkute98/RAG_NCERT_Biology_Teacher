@@ -1,0 +1,117 @@
+<!--
+WHAT: the single page of the NCERT Biology Teacher chatbot -- no sidebar,
+example questions live in a compact horizontal chip row, the WHOLE app fits
+in one viewport (only the chat log itself scrolls), and answers stream in
+live instead of appearing all at once.
+WHY: no internet access in this environment for real stock photography, so
+"biological imagery" is genuine inline SVG (DNA helix, molecule, leaf) plus
+this project's own real extracted textbook diagrams, used as tasteful,
+rotated background decoration -- not a placeholder for content that isn't
+really there.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NCERT Biology Teacher</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧬</text></svg>">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+  <!-- Decorative background layer 1: DNA helix + molecule + leaf motifs (SVG) -->
+  <svg class="bg-decor" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+    <defs>
+      <linearGradient id="strandA" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#0b6e4f"/>
+        <stop offset="1" stop-color="#7fc97f"/>
+      </linearGradient>
+    </defs>
+    <path class="helix-strand" d="M 1460 -50 C 1520 60, 1400 160, 1460 260 C 1520 360, 1400 460, 1460 560 C 1520 660, 1400 760, 1460 860 C 1520 960, 1400 1010, 1460 1050"
+          fill="none" stroke="url(#strandA)" stroke-width="7" opacity="0.20"/>
+    <path class="helix-strand helix-strand-b" d="M 1400 -50 C 1340 60, 1460 160, 1400 260 C 1340 360, 1460 460, 1400 560 C 1340 660, 1460 760, 1400 860 C 1340 960, 1460 1010, 1400 1050"
+          fill="none" stroke="url(#strandA)" stroke-width="7" opacity="0.20"/>
+    <g stroke="#2fa172" stroke-width="3" opacity="0.16">
+      <line x1="1400" y1="10" x2="1460" y2="10"/>
+      <line x1="1460" y1="110" x2="1400" y2="110"/>
+      <line x1="1400" y1="210" x2="1460" y2="210"/>
+      <line x1="1460" y1="310" x2="1400" y2="310"/>
+      <line x1="1400" y1="410" x2="1460" y2="410"/>
+      <line x1="1460" y1="510" x2="1400" y2="510"/>
+      <line x1="1400" y1="610" x2="1460" y2="610"/>
+      <line x1="1460" y1="710" x2="1400" y2="710"/>
+      <line x1="1400" y1="810" x2="1460" y2="810"/>
+      <line x1="1460" y1="910" x2="1400" y2="910"/>
+    </g>
+    <g class="molecule" fill="#0b6e4f" opacity="0.14">
+      <circle cx="110" cy="780" r="11"/>
+      <circle cx="195" cy="835" r="7"/>
+      <circle cx="70" cy="865" r="5"/>
+      <circle cx="225" cy="760" r="4"/>
+      <line x1="110" y1="780" x2="195" y2="835" stroke="#0b6e4f" stroke-width="2"/>
+      <line x1="110" y1="780" x2="70" y2="865" stroke="#0b6e4f" stroke-width="2"/>
+      <line x1="195" y1="835" x2="225" y2="760" stroke="#0b6e4f" stroke-width="2"/>
+    </g>
+    <path class="leaf" d="M 40 30 C 130 5, 200 70, 155 155 C 90 145, 25 105, 40 30 Z" fill="#7fc97f" opacity="0.14"/>
+    <g class="molecule molecule-2" fill="#2fa172" opacity="0.12">
+      <circle cx="1500" cy="140" r="8"/>
+      <circle cx="1550" cy="90" r="5"/>
+      <circle cx="1470" cy="80" r="4"/>
+      <line x1="1500" y1="140" x2="1550" y2="90" stroke="#2fa172" stroke-width="2"/>
+      <line x1="1500" y1="140" x2="1470" y2="80" stroke="#2fa172" stroke-width="2"/>
+    </g>
+  </svg>
+
+  <!-- Decorative background layer 2: real textbook diagrams, faded + rotated,
+       tucked in the margins outside the centered app column. -->
+  <div class="bg-photos" aria-hidden="true">
+    {% for url in thumbnail_urls %}
+    <img src="{{ url }}" class="bg-photo bg-photo-{{ loop.index }}" alt="" loading="lazy">
+    {% endfor %}
+  </div>
+
+  <div class="app-stage">
+  <div class="app">
+
+    <header class="topbar glass">
+      <div class="brand">
+        <span class="brand-icon">🧬</span>
+        <span class="brand-name">NCERT Biology Teacher</span>
+      </div>
+      <div class="topbar-controls">
+        <select id="chapter-select" title="Focus on a chapter">
+          <option value="">📚 All chapters</option>
+          {% for c in chapters %}
+          <option value="{{ c.number }}">{{ c.number }}. {{ c.title }}</option>
+          {% endfor %}
+        </select>
+        <button id="clear-btn" class="icon-btn" title="Clear conversation">🗑️</button>
+      </div>
+    </header>
+
+    <div class="chips-row">
+      {% for q in example_questions %}
+      <button class="chip" data-question="{{ q }}">{{ q }}</button>
+      {% endfor %}
+    </div>
+
+    <div id="chat-log" class="chat-log">
+      <div class="msg msg-assistant">
+        <div class="avatar">🧬</div>
+        <div class="bubble">Hello! I'm your Biology teacher. Ask me anything from your textbook, and I'll explain it — with a diagram, if one helps.</div>
+      </div>
+    </div>
+
+    <form id="chat-form" class="chat-form glass">
+      <input id="chat-input" type="text" autocomplete="off"
+             placeholder="Ask about anything in your Biology textbook...">
+      <button type="submit" aria-label="Send">➤</button>
+    </form>
+
+  </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='chat.js') }}"></script>
+</body>
+</html>

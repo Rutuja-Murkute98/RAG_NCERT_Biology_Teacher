@@ -1,0 +1,28 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Secrets
+.env
+
+# Generated data (regenerable from raw PDFs - see data/raw_pdfs/)
+data/extracted/
+data/chroma/
+data/*.sqlite3
+
+# Raw source PDFs are large; keep the manifest, not the binaries
+data/raw_pdfs/**/*.pdf
+!data/raw_pdfs/**/chapters.json
+
+# DeepEval's own cache/telemetry (Step 11) - regenerated on every eval run
+.deepeval/
+
+# Local, machine-specific Claude Code settings - not shared repo config
+.claude/settings.local.json

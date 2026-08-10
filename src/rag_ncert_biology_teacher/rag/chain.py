@@ -1,0 +1,254 @@
+"""
+WHAT
+----
+The actual RAG chain -- ties retriever.py (finds relevant chunks) and
+prompts.py (teacher persona + conversation history) together with a real
+Gemini call, so `ask(question, history)` -> a grounded, pedagogical,
+context-aware answer is one function call away. This is what a chat UI calls
+directly.
+
+WHY
+---
+Retrieval and prompt-shaping each solve one piece, but neither alone
+produces an answer. This file is the seam where retrieval becomes
+generation -- the same "retrieve cheaply, then spend one generative call"
+pattern already used successfully in image_handling/combined_pipeline.py,
+applied here to plain text chunks instead of images. `history` lets the
+model resolve what a follow-up like "explain that more simply" refers to,
+while the FACTS still come from fresh retrieval every turn (prompts.py rule 5).
+
+FLOW
+----
+  1. ALWAYS retrieve_with_scores(question) -> top-k chunks.
+  2. format_context(chunks) + format_history(history), fill
+     TEACHER_SYSTEM_PROMPT, send to Gemini. The model itself decides,
+     reading the actual retrieved content, whether this was a real
+     question or just a greeting.
+  3. Parse the trailing "GROUNDED: yes/no" then "SHOW_IMAGE: yes/no"
+     markers off the response -- GROUNDED decides whether to show
+     citations/sources at all, SHOW_IMAGE decides whether to additionally
+     show the top source's diagram(s).
+  4. Return (answer_text, chunks, show_image) -- chunks is [] whenever
+     GROUNDED was "no" (nothing to cite for a greeting).
+
+A retrieved chunk's `image_paths` metadata (chunking.py, Step 5) is a
+JSON-encoded list -- a page can carry zero, one, or several diagrams, unlike
+a "one image per page" scheme. `first_image_paths()` below scans the
+retrieved chunks in relevance order and returns the first page's images
+found, so a caller (the Flask UI) can display them without needing to know
+this JSON-encoding detail itself.
+
+LOGIC / MECHANISM
+------------------
+`history` is a plain list of (question, answer) tuples, kept by the CALLER
+(the chat UI, client-side) -- this file stays stateless itself, it just
+formats whatever history it's handed into the prompt.
+
+chapter_number (optional): lets a caller (the chat UI's chapter selector)
+restrict retrieval to ONE chapter instead of the whole book -- passed
+straight through to retriever.py's Chroma metadata filter. A real question
+that isn't covered by the SELECTED chapter still gets GROUNDED: yes (the
+model DID use real retrieved context to determine it's not covered here) --
+that's intentional, so its sources still show, letting the student see which
+pages were actually checked.
+
+ask_stream() is the actual fix for perceived response time -- text starts
+appearing as Gemini generates it instead of the UI waiting silently for the
+full answer. ask() still exists, built on top of ask_stream(), for callers
+that just want the final result (tests, scripts).
+"""
+
+import json
+
+from google import genai
+
+from rag_ncert_biology_teacher.config import GOOGLE_CLOUD_LOCATION, GOOGLE_CLOUD_PROJECT, LLM_MODEL, RAW_PDF_DIR
+from rag_ncert_biology_teacher.rag.prompts import (
+    TEACHER_SYSTEM_PROMPT,
+    format_chapter_list,
+    format_context,
+    format_history,
+    split_trailing_markers,
+)
+from rag_ncert_biology_teacher.rag.retriever import retrieve_with_scores
+from rag_ncert_biology_teacher.retry_utils import call_with_retry
+
+_client: genai.Client | None = None
+_chapter_list_block: str | None = None
+
+
+def _get_chapter_list_block() -> str:
+    """Cached, loaded once -- chapters.json doesn't change while the app runs."""
+    global _chapter_list_block
+    if _chapter_list_block is None:
+        manifest = json.loads((RAW_PDF_DIR / "class12_biology" / "chapters.json").read_text())
+        _chapter_list_block = format_chapter_list(manifest["chapters"])
+    return _chapter_list_block
+
+
+def get_client() -> genai.Client:
+    """Lazily create the Vertex AI client once, reused for every ask() call."""
+    global _client
+    if _client is None:
+        _client = genai.Client(vertexai=True, project=GOOGLE_CLOUD_PROJECT, location=GOOGLE_CLOUD_LOCATION)
+    return _client
+
+
+def _generate_stream(prompt: str):
+    """Yield text deltas from Gemini as they arrive, instead of blocking
+    until the whole response is ready -- the actual fix for "the chat feels
+    slow": the first words appear in ~1-2s instead of waiting several
+    seconds for a complete grounded answer.
+
+    generate_content_stream() returns a LAZY generator -- the actual HTTP
+    request (and any rate limit) only fires once the first chunk is pulled
+    from it, not when the generator object is created. Wrapping just the
+    call that CREATES the generator in call_with_retry (an earlier version
+    of this function did that) protects nothing: the real request happens
+    later, outside that wrapper, and a 429 there went unretried (found for
+    real running deepeval/run_eval.py, which fires enough requests to
+    reliably hit it). Retrying START-STREAM-PLUS-FIRST-CHUNK as one atomic
+    unit is safe to redo from scratch on failure, since nothing has reached
+    the caller yet. Once any chunk goes out, retrying would risk duplicating
+    already-shown text, so later chunks are deliberately left unprotected --
+    an error there surfaces to the caller rather than silently restarting.
+    """
+    client = get_client()
+
+    def _start_stream_and_get_first_chunk():
+        stream = client.models.generate_content_stream(model=LLM_MODEL, contents=prompt)
+        iterator = iter(stream)
+        return iterator, next(iterator, None)
+
+    iterator, first_chunk = call_with_retry(_start_stream_and_get_first_chunk)
+    if first_chunk is not None and first_chunk.text:
+        yield first_chunk.text
+    for chunk in iterator:
+        if chunk.text:
+            yield chunk.text
+
+
+# How many trailing characters we always hold back from the client while
+# streaming -- enough margin to contain BOTH marker lines ("GROUNDED: yes"
+# + "SHOW_IMAGE: yes", prompts.py rules 7-8) plus their leading newlines,
+# so neither line ever actually reaches the UI.
+_MARKER_HOLD_BACK = 60
+
+
+def first_image_paths(chunks) -> list[str]:
+    """Scan retrieved chunks in relevance order, return the first page's
+    image paths found (parsed back out of chunking.py's JSON-encoded
+    metadata). [] if none of the chunks have any diagram at all.
+    """
+    for chunk in chunks:
+        paths = json.loads(chunk.metadata.get("image_paths", "[]"))
+        if paths:
+            return paths
+    return []
+
+
+def ask_stream(
+    question: str,
+    history: list[tuple[str, str]] | None = None,
+    k: int = 4,
+    chapter_number: int | None = None,
+):
+    """Generator version of ask(): yields ("text", chunk) pieces as they
+    stream in from Gemini, ending with
+    ("meta", {"chunks": [...], "show_image": bool, "image_paths": [...]})
+    once the full answer (and its trailing markers) is known. Lets a chat UI
+    render progressively instead of waiting for one long response.
+    """
+    scored_chunks = retrieve_with_scores(question, k=k, chapter_number=chapter_number)
+    chunks = [chunk for chunk, _score in scored_chunks]
+    context = format_context(chunks) if chunks else "(No relevant content was retrieved.)"
+    history_block = format_history(history or [])
+    prompt = TEACHER_SYSTEM_PROMPT.format(
+        context=context,
+        question=question,
+        history_block=history_block,
+        chapter_list=_get_chapter_list_block(),
+    )
+
+    held = ""
+    for piece in _generate_stream(prompt):
+        held += piece
+        if len(held) > _MARKER_HOLD_BACK:
+            to_send, held = held[: -_MARKER_HOLD_BACK], held[-_MARKER_HOLD_BACK:]
+            yield "text", to_send
+
+    # Stream ended -- `held` is at most _MARKER_HOLD_BACK chars, containing
+    # both marker lines (if the model included them, as instructed).
+    final_text, grounded, show_image = split_trailing_markers(held)
+    if final_text:
+        yield "text", final_text
+
+    # GROUNDED: no (a greeting/small talk) -> no citations, no image, even
+    # though we DID retrieve chunks (that's fine -- retrieval is cheap;
+    # what matters is not showing sources for a reply that never used them).
+    shown_chunks = chunks if grounded else []
+    yield "meta", {
+        "chunks": shown_chunks,
+        "show_image": show_image and grounded,
+        "image_paths": first_image_paths(shown_chunks) if (show_image and grounded) else [],
+    }
+
+
+def ask(
+    question: str,
+    history: list[tuple[str, str]] | None = None,
+    k: int = 4,
+    chapter_number: int | None = None,
+):
+    """Non-streaming convenience wrapper around ask_stream() -- collects the
+    full answer before returning, for callers that don't need progressive
+    display (tests, scripts). Returns (answer_text, retrieved_chunks, show_image).
+    """
+    parts: list[str] = []
+    chunks, show_image = [], False
+    for kind, payload in ask_stream(question, history=history, k=k, chapter_number=chapter_number):
+        if kind == "text":
+            parts.append(payload)
+        else:
+            chunks, show_image = payload["chunks"], payload["show_image"]
+    return "".join(parts).strip(), chunks, show_image
+
+
+if __name__ == "__main__":
+    import sys
+
+    # Windows' default console codepage (cp1252) can't print some characters
+    # Gemini legitimately outputs -- force UTF-8 stdout so this demo doesn't
+    # crash on the model's own correct output (found for real in Step 8).
+    sys.stdout.reconfigure(encoding="utf-8")
+
+    # Usage: uv run python -m rag_ncert_biology_teacher.rag.chain
+
+    print("=== Test: greeting should NOT retrieve/cite/show an image ===")
+    greeting_answer, greeting_chunks, greeting_show_image = ask("hi")
+    print(f"Answer: {greeting_answer}")
+    print(f"Chunks: {len(greeting_chunks)}, show_image: {greeting_show_image}")
+    assert greeting_chunks == [] and greeting_show_image is False, "greeting gate failed"
+    print("PASS\n")
+
+    print("=== Regression test: misspelled real question should NOT be treated as small talk ===")
+    typo_answer, typo_chunks, typo_show_image = ask("show me the images of the codom")
+    print(f"Answer: {typo_answer}")
+    print(f"Chunks: {len(typo_chunks)}, show_image: {typo_show_image}")
+    assert len(typo_chunks) > 0, "REGRESSION: misspelled real question treated as greeting!"
+    print("PASS\n")
+
+    print("=== Test: a question explicitly asking to SEE a diagram -> show_image should be True ===")
+    img_answer, img_chunks, img_show_image = ask("Show me what the Copper T looks like.")
+    print(f"Answer: {img_answer}")
+    print(f"show_image: {img_show_image}")
+    print()
+
+    print("=== Turn 1: 'What is natural selection?' ===")
+    answer1, chunks1, show_image1 = ask("What is natural selection?")
+    print(f"Answer:\n{answer1}\nshow_image: {show_image1}")
+
+    history = [("What is natural selection?", answer1)]
+    print("\n=== Turn 2 (follow-up, tests conversation memory): 'Explain that in one simple sentence.' ===")
+    answer2, chunks2, show_image2 = ask("Explain that in one simple sentence.", history=history)
+    print(f"Answer:\n{answer2}\nshow_image: {show_image2}")
