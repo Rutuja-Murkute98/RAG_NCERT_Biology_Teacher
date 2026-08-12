@@ -88,9 +88,32 @@ if not GOOGLE_CLOUD_PROJECT:
 
 
 def _to_image_url(path) -> str:
-    """Turn a real extracted-image file path into a URL this app can serve."""
-    rel = Path(path).resolve().relative_to(_EXTRACTED_ROOT)
-    return f"/api/image/{rel.as_posix()}"
+    """Turn a real extracted-image file path into a URL this app can serve.
+
+    `path` is a raw string pulled straight out of Chroma's metadata (see
+    chunking.py) -- which was written by WHATEVER machine/OS built the
+    index, not necessarily this one. This project's index was built on
+    Windows, so a stored path looks like "D:\\...\\data\\extracted\\
+    class12_biology\\...\\page_004_img_1.jpeg" -- meaningless to pathlib on
+    a Linux deploy (Render), since backslash isn't a path separator there;
+    Path(path).resolve() silently produces garbage instead of raising,
+    and .relative_to() then throws, which is exactly what surfaced as
+    "Something went wrong generating that answer" on Render even though
+    the same code worked perfectly in local Windows testing (found for
+    real: text streamed fine, then the final meta step crashed).
+
+    Fixed by never treating the stored string as a real path on THIS
+    machine at all -- split on both possible separators, take everything
+    from "extracted" onward (the one directory name guaranteed to appear
+    right before the book/chapter/image structure), and rebuild a clean
+    relative URL from that, regardless of which OS/drive-letter/username
+    originally indexed it.
+    """
+    raw = str(path).replace("\\", "/")
+    segments = raw.split("/")
+    if "extracted" in segments:
+        segments = segments[segments.index("extracted") + 1 :]
+    return f"/api/image/{'/'.join(segments)}"
 
 
 def _thumbnail_urls(max_images: int = 6) -> list[str]:
