@@ -212,24 +212,43 @@ login. A Render container can't do that. Instead:
 **2. Data.** `data/raw_pdfs/*.pdf`, `data/extracted/`, `data/chroma/`, and
 `data/record_manager.sqlite3` are all git-ignored on purpose (large and/or
 regenerable) -- which also means a fresh `git`-based deploy won't have them,
-and Render's container filesystem is otherwise wiped on every redeploy. The
+and a PaaS's container filesystem is otherwise wiped on every redeploy (and,
+on a free tier with no persistent disk, on every cold start too). The
 chatbot can't answer anything without the already-built index, so this data
-has to live somewhere that survives redeploys:
-1. Render → your service → **Disks** → add a persistent disk (1-2 GB is
-   plenty here -- the whole `data/` folder is under 200 MB), mounted at a
-   path of your choice, e.g. `/var/data`.
-2. Set the env var `DATA_DIR=/var/data` (see `.env.example`) -- everything
-   in `config.py` resolves from this instead of `<repo>/data`.
-3. Get your already-built `data/` folder onto that disk **once** (it's
-   already paid-for captioning/embedding work -- no need to redo it): upload
-   it to a GCS bucket you own, then from Render's Shell (Starter plan or
-   above), `gcloud storage cp -r gs://your-bucket/data/* /var/data/`. It
-   persists across redeploys after that.
-4. Alternative if you'd rather not deal with a bucket: after the disk is
-   attached, run `uv run python scripts/index_all_chapters.py` once from
-   Render's Shell -- but that re-uploads the raw PDFs and re-pays for every
-   Gemini captioning/embedding call, so it's slower and costs more than
-   copying the already-built data.
+has to come from somewhere at startup. Two ways to solve that -- pick one:
+
+- **Paid tier with a persistent disk** (simplest, no re-download ever):
+  1. Render → your service → **Disks** → add a disk (1-2 GB is plenty --
+     the built index is under 50 MB), mounted at a path of your choice,
+     e.g. `/var/data`.
+  2. Set the env var `DATA_DIR=/var/data` (see `.env.example`) -- everything
+     in `config.py` resolves from this instead of `<repo>/data`.
+  3. Get your already-built `data/` folder onto that disk **once**: upload
+     it to a GCS bucket you own, then from Render's Shell,
+     `gcloud storage cp -r gs://your-bucket/data/* /var/data/`. It persists
+     across redeploys after that.
+
+- **Free tier, download at every cold start** (what this repo actually
+  implements, via `bootstrap.py`): Render's Free tier has no Disks/Shell at
+  all, so there's nowhere to put a one-time copy. Instead, `app/server.py`
+  calls `bootstrap.ensure_data_present()` on startup, which downloads the
+  built index (`data/chroma/` + `data/extracted/` +
+  `record_manager.sqlite3` -- ~30MB, **not** the ~160MB raw PDFs, which are
+  only used for decorative thumbnails and skipped gracefully if absent)
+  from a GCS bucket, in parallel, taking roughly 30-60s on a cold start.
+  1. Upload your local `data/` folder once: `gcloud storage cp -r data
+     gs://your-bucket/`.
+  2. Grant your service account read access:
+     `gcloud storage buckets add-iam-policy-binding gs://your-bucket
+     --member="serviceAccount:YOUR_SA@..." --role="roles/storage.objectViewer"`.
+  3. Set the env var `GCS_DATA_BUCKET=your-bucket` (see `.env.example`).
+     Leave `DATA_DIR` unset -- the default `<repo>/data` inside the
+     container is fine since it's ephemeral either way.
+  4. If the service ever cold-starts before the disk-based flow above is
+     wired up, `ensure_data_present()` is a no-op locally (unset
+     `GCS_DATA_BUCKET`) and idempotent per-boot (skips re-downloading if
+     `data/chroma/` already has files, e.g. a gunicorn worker restart
+     within an already-warm container).
 
 **Then set up the service itself:**
 - New → Web Service → connect this GitHub repo
@@ -239,9 +258,10 @@ has to live somewhere that survives redeploys:
 - Environment variables: everything in `.env.example`
   (`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GEMINI_CAPTIONING_MODEL`,
   `MULTIMODAL_EMBEDDING_MODEL_NAME`, `MULTIMODAL_EMBEDDING_LOCATION`,
-  `LLM_PROVIDER`, `LLM_MODEL`) plus `DATA_DIR` and
-  `GOOGLE_APPLICATION_CREDENTIALS` from the two sections above
+  `LLM_PROVIDER`, `LLM_MODEL`) plus `GOOGLE_APPLICATION_CREDENTIALS` from
+  the Auth section above, and either `DATA_DIR` or `GCS_DATA_BUCKET`
+  depending on which Data option you picked
 
-Running locally is unaffected by any of this -- `DATA_DIR` and
-`GOOGLE_APPLICATION_CREDENTIALS` are both optional and only need setting in
-production.
+Running locally is unaffected by any of this -- `DATA_DIR`,
+`GCS_DATA_BUCKET`, and `GOOGLE_APPLICATION_CREDENTIALS` are all optional and
+only need setting in production.

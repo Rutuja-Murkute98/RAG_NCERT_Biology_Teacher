@@ -50,12 +50,19 @@ from pathlib import Path
 import fitz  # PyMuPDF
 from flask import Flask, Response, render_template, request, send_file
 
+from rag_ncert_biology_teacher.bootstrap import ensure_data_present
 from rag_ncert_biology_teacher.config import EXTRACTED_DIR, GOOGLE_CLOUD_PROJECT, RAW_PDF_DIR
 from rag_ncert_biology_teacher.ingestion.pdf_loader import render_page_thumbnail
 from rag_ncert_biology_teacher.rag.chain import ask_stream
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+# Must run before anything below touches EXTRACTED_DIR/CHROMA_DIR -- a no-op
+# locally (GCS_DATA_BUCKET unset), but on a from-scratch container (e.g.
+# Render's Free tier, which has no persistent disk) this is what actually
+# populates the index before the first request arrives. See bootstrap.py.
+ensure_data_present()
 
 BOOK = "class12_biology"
 
@@ -94,6 +101,11 @@ def _thumbnail_urls(max_images: int = 6) -> list[str]:
     in actual answers) purely to match the reference project's decorative
     look exactly -- pdf_loader.render_page_thumbnail() renders + caches one
     page per chosen chapter on first use.
+
+    Needs the raw chapter PDFs, which some deployments deliberately don't
+    have (e.g. Render's Free tier -- see bootstrap.py's WHY for why only the
+    already-built index is downloaded, not these). Since this is purely
+    decorative, a missing PDF is skipped rather than crashing the whole page.
     """
     manifest = json.loads((RAW_PDF_DIR / BOOK / "chapters.json").read_text())
     chapters = manifest["chapters"]
@@ -102,13 +114,19 @@ def _thumbnail_urls(max_images: int = 6) -> list[str]:
 
     urls = []
     for chapter in chosen:
-        chapter_key = f"chapter_{chapter['number']:02d}"
-        doc = fitz.open(RAW_PDF_DIR / BOOK / chapter["file"])
-        middle_page = (doc.page_count // 2) + 1
-        doc.close()
+        pdf_path = RAW_PDF_DIR / BOOK / chapter["file"]
+        if not pdf_path.exists():
+            continue
+        try:
+            chapter_key = f"chapter_{chapter['number']:02d}"
+            doc = fitz.open(pdf_path)
+            middle_page = (doc.page_count // 2) + 1
+            doc.close()
 
-        thumbnail_path = render_page_thumbnail(BOOK, chapter_key, middle_page)
-        urls.append(_to_image_url(thumbnail_path))
+            thumbnail_path = render_page_thumbnail(BOOK, chapter_key, middle_page)
+            urls.append(_to_image_url(thumbnail_path))
+        except Exception:
+            logger.warning("Skipping thumbnail for chapter %s", chapter.get("number"), exc_info=True)
     return urls
 
 
