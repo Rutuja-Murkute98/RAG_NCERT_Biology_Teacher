@@ -18,10 +18,19 @@ load_dotenv()
 
 # --- Paths -------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RAW_PDF_DIR = PROJECT_ROOT / "data" / "raw_pdfs"
-EXTRACTED_DIR = PROJECT_ROOT / "data" / "extracted"
-CHROMA_DIR = PROJECT_ROOT / "data" / "chroma"
-RECORD_MANAGER_DB = PROJECT_ROOT / "data" / "record_manager.sqlite3"
+
+# DATA_DIR defaults to <repo>/data for local dev (unchanged behaviour), but is
+# overridable via an env var for deployment: a host like Render mounts a
+# persistent disk at a path IT chooses, not necessarily inside the git
+# checkout -- without this override, data/chroma and data/extracted would
+# have to land at a guessed internal path to be found, and silently vanish
+# on every redeploy otherwise (the rest of the container filesystem is
+# ephemeral). Set DATA_DIR to the disk's mount path in production.
+DATA_DIR = Path(os.getenv("DATA_DIR", str(PROJECT_ROOT / "data")))
+RAW_PDF_DIR = DATA_DIR / "raw_pdfs"
+EXTRACTED_DIR = DATA_DIR / "extracted"
+CHROMA_DIR = DATA_DIR / "chroma"
+RECORD_MANAGER_DB = DATA_DIR / "record_manager.sqlite3"
 
 # --- Model settings ------------------------------------------------------
 TEXT_EMBEDDING_MODEL_NAME = os.getenv("TEXT_EMBEDDING_MODEL_NAME", "text-embedding-005")

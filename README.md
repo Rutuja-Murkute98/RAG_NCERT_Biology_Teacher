@@ -191,11 +191,57 @@ data/extracted/              # generated: extracted text/images/captions (not tr
 data/chroma/                  # generated: the vector database (not tracked, regenerable)
 ```
 
-## Deployment
+## Deployment (Render)
 
-The Flask app is a standard WSGI app, ready for any PaaS that runs
-`gunicorn app.server:app` and sets `$PORT` (e.g. Render):
+The Flask app is a standard WSGI app (`gunicorn app.server:app`, reads
+`$PORT`), but two things need real attention before it'll work on Render or
+any similar PaaS -- both are about things that are true and necessary on
+your own machine but don't exist by default on a fresh container:
 
-```bash
-gunicorn app.server:app
-```
+**1. Auth.** Locally this project authenticates via
+`gcloud auth application-default login` -- your own interactive Google
+login. A Render container can't do that. Instead:
+1. GCP Console → IAM & Admin → Service Accounts → create one, grant it the
+   **Vertex AI User** role (`roles/aiplatform.user`).
+2. Create a JSON key for it, download it.
+3. In Render: your service → Environment → **Secret Files** → add the key's
+   contents as a file (e.g. path `/etc/secrets/gcp-key.json`).
+4. Add an env var `GOOGLE_APPLICATION_CREDENTIALS=/etc/secrets/gcp-key.json`
+   -- `google-genai`'s Vertex AI client picks this up automatically.
+
+**2. Data.** `data/raw_pdfs/*.pdf`, `data/extracted/`, `data/chroma/`, and
+`data/record_manager.sqlite3` are all git-ignored on purpose (large and/or
+regenerable) -- which also means a fresh `git`-based deploy won't have them,
+and Render's container filesystem is otherwise wiped on every redeploy. The
+chatbot can't answer anything without the already-built index, so this data
+has to live somewhere that survives redeploys:
+1. Render → your service → **Disks** → add a persistent disk (1-2 GB is
+   plenty here -- the whole `data/` folder is under 200 MB), mounted at a
+   path of your choice, e.g. `/var/data`.
+2. Set the env var `DATA_DIR=/var/data` (see `.env.example`) -- everything
+   in `config.py` resolves from this instead of `<repo>/data`.
+3. Get your already-built `data/` folder onto that disk **once** (it's
+   already paid-for captioning/embedding work -- no need to redo it): upload
+   it to a GCS bucket you own, then from Render's Shell (Starter plan or
+   above), `gcloud storage cp -r gs://your-bucket/data/* /var/data/`. It
+   persists across redeploys after that.
+4. Alternative if you'd rather not deal with a bucket: after the disk is
+   attached, run `uv run python scripts/index_all_chapters.py` once from
+   Render's Shell -- but that re-uploads the raw PDFs and re-pays for every
+   Gemini captioning/embedding call, so it's slower and costs more than
+   copying the already-built data.
+
+**Then set up the service itself:**
+- New → Web Service → connect this GitHub repo
+- Environment: Python, with env var `PYTHON_VERSION=3.13.1` (or newer 3.13.x)
+- Build command: `pip install uv && uv sync --frozen`
+- Start command: `uv run gunicorn --bind 0.0.0.0:$PORT app.server:app`
+- Environment variables: everything in `.env.example`
+  (`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GEMINI_CAPTIONING_MODEL`,
+  `MULTIMODAL_EMBEDDING_MODEL_NAME`, `MULTIMODAL_EMBEDDING_LOCATION`,
+  `LLM_PROVIDER`, `LLM_MODEL`) plus `DATA_DIR` and
+  `GOOGLE_APPLICATION_CREDENTIALS` from the two sections above
+
+Running locally is unaffected by any of this -- `DATA_DIR` and
+`GOOGLE_APPLICATION_CREDENTIALS` are both optional and only need setting in
+production.
