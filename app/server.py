@@ -102,10 +102,15 @@ def _thumbnail_urls(max_images: int = 6) -> list[str]:
     look exactly -- pdf_loader.render_page_thumbnail() renders + caches one
     page per chosen chapter on first use.
 
-    Needs the raw chapter PDFs, which some deployments deliberately don't
-    have (e.g. Render's Free tier -- see bootstrap.py's WHY for why only the
-    already-built index is downloaded, not these). Since this is purely
-    decorative, a missing PDF is skipped rather than crashing the whole page.
+    Some deployments deliberately don't ship the raw chapter PDFs (e.g.
+    Render's Free tier -- see bootstrap.py's WHY for why only the
+    already-built index is downloaded, not these ~160MB files). render_page_
+    thumbnail()'s cached output lives under data/extracted/ though, NOT
+    data/raw_pdfs/ -- so it IS part of that downloaded index. A chapter whose
+    PDF is missing still shows its thumbnail correctly, as long as it was
+    already rendered+cached (and thus uploaded to the data bucket) at least
+    once before deploying; only falls back to skipping the chapter entirely
+    if genuinely neither the PDF nor a cached render exists anywhere.
     """
     manifest = json.loads((RAW_PDF_DIR / BOOK / "chapters.json").read_text())
     chapters = manifest["chapters"]
@@ -114,16 +119,19 @@ def _thumbnail_urls(max_images: int = 6) -> list[str]:
 
     urls = []
     for chapter in chosen:
+        chapter_key = f"chapter_{chapter['number']:02d}"
         pdf_path = RAW_PDF_DIR / BOOK / chapter["file"]
-        if not pdf_path.exists():
-            continue
         try:
-            chapter_key = f"chapter_{chapter['number']:02d}"
-            doc = fitz.open(pdf_path)
-            middle_page = (doc.page_count // 2) + 1
-            doc.close()
-
-            thumbnail_path = render_page_thumbnail(BOOK, chapter_key, middle_page)
+            if pdf_path.exists():
+                doc = fitz.open(pdf_path)
+                middle_page = (doc.page_count // 2) + 1
+                doc.close()
+                thumbnail_path = render_page_thumbnail(BOOK, chapter_key, middle_page)
+            else:
+                cached = sorted((EXTRACTED_DIR / BOOK / chapter_key / "pages").glob("page_*.png"))
+                if not cached:
+                    continue
+                thumbnail_path = cached[0]
             urls.append(_to_image_url(thumbnail_path))
         except Exception:
             logger.warning("Skipping thumbnail for chapter %s", chapter.get("number"), exc_info=True)
