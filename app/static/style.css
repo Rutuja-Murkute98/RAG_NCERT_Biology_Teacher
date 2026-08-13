@@ -177,15 +177,14 @@ body::before {
 }
 .icon-btn:hover { background: #fdf1f1; transform: rotate(-8deg) scale(1.05); }
 
-/* --- Quick-question chips (compact, horizontal scroll) ------------------- */
+/* --- Quick-question chips (compact, wraps onto multiple lines) ----------- */
 
 .chips-row {
   flex: 0 0 auto;
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
-  overflow-x: auto;
   padding-bottom: 0.15rem;
-  scrollbar-width: thin;
 }
 .chip {
   flex: 0 0 auto;
