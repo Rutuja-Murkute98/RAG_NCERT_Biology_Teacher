@@ -15,9 +15,15 @@ called any Google API in the first place, only PyMuPDF.
 Model names verified working against a REAL freshly-created API key (not
 assumed from memory) -- "gemini-2.5-flash" turned out to be blocked for new
 API keys ("no longer available to new users"), so LLM_MODEL defaults to the
-"-latest" alias instead of a specific version, deliberately, so a future
-model retirement doesn't silently break this again. gemini-embedding-2 was
-confirmed to handle text AND image input in the same 3072-dim space.
+"-lite-latest" alias instead of a specific version, deliberately, so a
+future model retirement doesn't silently break this again -- but
+specifically the LITE variant: plain "gemini-flash-lite-latest" was tried first
+and resolved to gemini-3.6-flash, whose free tier turned out to be only 20
+requests/DAY (found for real after it silently ran out mid-session).
+gemini-*-flash-lite models consistently get a far more generous free-tier
+quota (~1000 RPD) and are still well-suited to this chat/caption workload.
+gemini-embedding-2 was confirmed to handle text AND image input in the
+same 3072-dim space.
 
 One side effect worth knowing: Vertex AI's text embedding (text-embedding-005,
 768-dim) and the Developer API's embedding model (gemini-embedding-2,
@@ -65,13 +71,15 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # space -- no separate "multimodal" model/config needed anymore.
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "gemini-embedding-2")
 
-# Chat LLM (used once the RAG chain is built) -- "-latest" alias, not a
-# pinned version, so this doesn't break again the way gemini-2.5-flash did
-# (retired for new API keys mid-project).
+# Chat LLM (used once the RAG chain is built) -- "-lite-latest" alias, not
+# a pinned version, so this doesn't break again the way gemini-2.5-flash
+# did (retired for new API keys mid-project) -- specifically the LITE
+# variant, since plain "-latest" resolved to a model with only 20
+# requests/day free (see the module docstring above for the full story).
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "google")
-LLM_MODEL = os.getenv("LLM_MODEL", "gemini-flash-latest")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-flash-lite-latest")
 
-GEMINI_CAPTIONING_MODEL = os.getenv("GEMINI_CAPTIONING_MODEL", "gemini-flash-latest")
+GEMINI_CAPTIONING_MODEL = os.getenv("GEMINI_CAPTIONING_MODEL", "gemini-flash-lite-latest")
 
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
