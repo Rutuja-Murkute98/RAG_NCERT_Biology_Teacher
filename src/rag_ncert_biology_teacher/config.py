@@ -3,10 +3,26 @@
 Every other module should import paths/settings from here instead of
 hardcoding strings, so we only have one place to change things.
 
-Updated to GCP/Vertex AI throughout (previously referenced local BLIP
-captioning and local sentence-transformers embeddings, from before this
-project's pipeline was built) -- image extraction (ingestion/pdf_loader.py)
-is untouched; everything downstream of it now runs on Vertex AI.
+Migrated from Vertex AI to the Gemini Developer API (Google AI Studio) --
+Vertex AI requires a GCP project with active billing, and this project's
+billing account was suspended (payment declined) mid-project. The Developer
+API is a genuinely separate product surface: authenticated by a single free
+API key (aistudio.google.com/apikey), not tied to GCP project billing at
+all, with its own free-tier rate limits instead of pay-per-call. Image
+extraction (ingestion/pdf_loader.py) is untouched by any of this -- it never
+called any Google API in the first place, only PyMuPDF.
+
+Model names verified working against a REAL freshly-created API key (not
+assumed from memory) -- "gemini-2.5-flash" turned out to be blocked for new
+API keys ("no longer available to new users"), so LLM_MODEL defaults to the
+"-latest" alias instead of a specific version, deliberately, so a future
+model retirement doesn't silently break this again. gemini-embedding-2 was
+confirmed to handle text AND image input in the same 3072-dim space.
+
+One side effect worth knowing: Vertex AI's text embedding (text-embedding-005,
+768-dim) and the Developer API's embedding model (gemini-embedding-2,
+3072-dim, multimodal) are DIFFERENT vector spaces -- switching required a
+full re-index (see indexing/embeddings.py), not just an auth change.
 """
 
 import os
@@ -32,28 +48,30 @@ EXTRACTED_DIR = DATA_DIR / "extracted"
 CHROMA_DIR = DATA_DIR / "chroma"
 RECORD_MANAGER_DB = DATA_DIR / "record_manager.sqlite3"
 
+# --- Gemini Developer API --------------------------------------------------
+# The ONE thing every Google API call in this project needs -- get a free
+# key at https://aistudio.google.com/apikey (no credit card, not tied to any
+# GCP project's billing status). Every genai.Client(...) in this codebase
+# now takes api_key=GEMINI_API_KEY instead of vertexai=True/project/location.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
 # --- Model settings ------------------------------------------------------
-TEXT_EMBEDDING_MODEL_NAME = os.getenv("TEXT_EMBEDDING_MODEL_NAME", "text-embedding-005")
+# ONE embedding model for everything -- chunks, captions, AND raw images,
+# all in the same vector space. This is a genuine simplification over the
+# old Vertex setup (which needed text-embedding-005 for chunks/captions and
+# a SEPARATE gemini-embedding-2 for images, two incompatible spaces that
+# could never be compared): gemini-embedding-2 on the Developer API is
+# natively multimodal, so text-only and image inputs already share one
+# space -- no separate "multimodal" model/config needed anymore.
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "gemini-embedding-2")
 
-# Chat LLM (used once the RAG chain is built) -- Gemini, matching the rest
-# of this project's GCP-only infrastructure.
+# Chat LLM (used once the RAG chain is built) -- "-latest" alias, not a
+# pinned version, so this doesn't break again the way gemini-2.5-flash did
+# (retired for new API keys mid-project).
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "google")
-LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-flash-latest")
 
-# --- GCP / Vertex AI -------------------------------------------------------
-# Auth uses Application Default Credentials (`gcloud auth application-default
-# login`) -- no API key file needed, so only project + region live here.
-GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
-GOOGLE_CLOUD_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
-GEMINI_CAPTIONING_MODEL = os.getenv("GEMINI_CAPTIONING_MODEL", "gemini-2.5-flash")
-
-# Multimodal (image) embeddings -- a joint text+image vector space, for Approach 2's
-# direct image-embedding retrieval. multimodalembedding@001 (the older vertexai SDK
-# model) loses SDK access June 2026 and retires April 2027 - gemini-embedding-2 is
-# the current replacement, but only reachable via the "global" endpoint right now,
-# not GOOGLE_CLOUD_LOCATION - verified directly against this project before picking it.
-MULTIMODAL_EMBEDDING_MODEL_NAME = os.getenv("MULTIMODAL_EMBEDDING_MODEL_NAME", "gemini-embedding-2")
-MULTIMODAL_EMBEDDING_LOCATION = os.getenv("MULTIMODAL_EMBEDDING_LOCATION", "global")
+GEMINI_CAPTIONING_MODEL = os.getenv("GEMINI_CAPTIONING_MODEL", "gemini-flash-latest")
 
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
@@ -70,12 +88,9 @@ if __name__ == "__main__":
     print(f"RAW_PDF_DIR                = {RAW_PDF_DIR}")
     print(f"EXTRACTED_DIR              = {EXTRACTED_DIR}")
     print(f"CHROMA_DIR                 = {CHROMA_DIR}")
-    print(f"TEXT_EMBEDDING_MODEL_NAME  = {TEXT_EMBEDDING_MODEL_NAME}")
-    print(f"GOOGLE_CLOUD_PROJECT       = {GOOGLE_CLOUD_PROJECT}")
-    print(f"GOOGLE_CLOUD_LOCATION      = {GOOGLE_CLOUD_LOCATION}")
+    print(f"GEMINI_API_KEY set?        = {bool(GEMINI_API_KEY)}")
+    print(f"EMBEDDING_MODEL_NAME       = {EMBEDDING_MODEL_NAME}")
     print(f"GEMINI_CAPTIONING_MODEL    = {GEMINI_CAPTIONING_MODEL}")
-    print(f"MULTIMODAL_EMBEDDING_MODEL_NAME = {MULTIMODAL_EMBEDDING_MODEL_NAME}")
-    print(f"MULTIMODAL_EMBEDDING_LOCATION   = {MULTIMODAL_EMBEDDING_LOCATION}")
     print(f"LLM_PROVIDER               = {LLM_PROVIDER}")
     print(f"LLM_MODEL                  = {LLM_MODEL}")
     print("Config loaded OK.")

@@ -22,7 +22,7 @@ FLOW
   2. Caption each image with Gemini -> text, dropping any Gemini itself
      flagged NOT useful (captioning.py's USEFUL marker, Step 3).
   3. Embed each surviving caption's TEXT with embed_texts() (Step 4's
-     embeddings.py, Vertex AI text-embedding-005).
+     embeddings.py, gemini-embedding-2).
   4. At query time, embed the student's question with the SAME embed_texts().
   5. Rank captions by cosine similarity to the question.
   6. Return the image attached to the winning caption.
@@ -99,9 +99,9 @@ def build_caption_index(book: str, chapter_key: str, cache_path: Path | None = N
     captions = [e["caption"] for e in entries if e["useful"]]
 
     if not captions:
-        return [], [], np.zeros((0, 768))
+        return [], [], np.zeros((0, 3072))
 
-    print(f"\nEmbedding {len(captions)} captions (Vertex AI text-embedding-005)...")
+    print(f"\nEmbedding {len(captions)} captions (gemini-embedding-2)...")
     caption_vectors = embed_texts(captions)
 
     return image_paths, captions, caption_vectors

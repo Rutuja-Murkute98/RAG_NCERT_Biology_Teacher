@@ -2,7 +2,8 @@
 
 A Retrieval-Augmented Generation (RAG) chatbot that teaches NCERT Class 12
 Biology — grounded in the actual textbook (text **and** diagrams), not
-generic knowledge. Built entirely on Google Cloud (Vertex AI / Gemini).
+generic knowledge. Built on Gemini via the free Google AI Studio Developer
+API — no cloud billing account needed, just a free API key.
 
 Ask it a question and it retrieves the relevant textbook passages (and
 diagrams, when helpful), then explains the answer like a patient teacher —
@@ -16,7 +17,9 @@ the book doesn't cover something instead of guessing.
   when the retrieved content doesn't actually answer the question.
 - **Diagrams shown automatically** — when an answer centers on a labeled
   structure or process, the relevant textbook diagram is shown alongside
-  the explanation, without the student needing to ask for it.
+  the explanation, without the student needing to ask for it. When a page
+  has several diagrams, the specific one shown is re-ranked against the
+  question's own wording, not just "whichever image is listed first."
 - **Conversation memory** — follow-ups like "explain that more simply"
   correctly resolve to what was just discussed.
 - **Streaming responses** — answers appear as they're generated, not after
@@ -61,9 +64,9 @@ NCERT chapter PDFs
 └─────────────────┘   image-path metadata
       │
       ▼
-┌─────────────────┐   Vertex AI text-embedding-005 → Chroma (persisted
-│  Embed + Index   │   vector DB), tracked by SQLRecordManager for true
-└─────────────────┘   incremental re-indexing
+┌─────────────────┐   gemini-embedding-2 → Chroma (persisted vector DB),
+│  Embed + Index   │   tracked by SQLRecordManager for true incremental
+└─────────────────┘   re-indexing
       │
       ▼
 ┌─────────────────┐   question → retrieve top-k chunks → teacher-persona
@@ -78,14 +81,13 @@ NCERT chapter PDFs
 
 ## Tech stack
 
-Everything runs on **Google Cloud / Vertex AI** — one provider throughout,
-no other API keys needed:
+Everything runs on **Gemini, via the free Google AI Studio Developer
+API** — one provider, one free API key, no cloud billing account required:
 
 | Purpose | Model / Tool |
 |---|---|
-| Chat + captioning + judge (eval) | `gemini-2.5-flash` |
-| Text embeddings | `text-embedding-005` |
-| Multimodal (image) embeddings | `gemini-embedding-2` |
+| Chat + captioning + judge (eval) | `gemini-flash-latest` |
+| Text + image embeddings (one unified model) | `gemini-embedding-2` |
 | Vector database | ChromaDB (persisted locally) |
 | Incremental indexing | LangChain `SQLRecordManager` |
 | PDF parsing / rendering | PyMuPDF |
@@ -93,15 +95,22 @@ no other API keys needed:
 | Evaluation | DeepEval (Faithfulness, Answer Relevancy, Contextual Precision/Recall) |
 | Environment / packaging | `uv` |
 
+`gemini-embedding-2` is natively multimodal — text chunks, image captions,
+and raw diagram pixels all embed into the same 3072-dim space, so a single
+model/config covers both plain-text retrieval and Approach 2's direct
+image-pixel search (an earlier Vertex AI version of this project needed two
+separate, never-comparable embedding models for that; the Developer API
+doesn't have that limitation).
+
 ## Setup
 
 ### 1. Prerequisites
 
 - Python 3.13+
 - [`uv`](https://docs.astral.sh/uv/)
-- A Google Cloud project with the Vertex AI API enabled and billing linked
-- `gcloud auth application-default login` run once on your machine (no API
-  key files needed anywhere — auth is via Application Default Credentials)
+- A free Gemini API key — get one at
+  [aistudio.google.com/apikey](https://aistudio.google.com/apikey) (no
+  credit card, not tied to any cloud billing account)
 
 ### 2. Install dependencies
 
@@ -113,7 +122,7 @@ uv sync
 
 ```bash
 cp .env.example .env
-# then edit .env and set GOOGLE_CLOUD_PROJECT to your GCP project id
+# then edit .env and set GEMINI_API_KEY to your key
 ```
 
 ### 4. Get the textbook data
@@ -132,7 +141,9 @@ uv run python scripts/index_all_chapters.py
 This extracts diagrams, captions them with Gemini, chunks the text, embeds
 everything, and indexes it into Chroma. It's resumable — re-running after an
 interruption picks up from cached progress rather than starting over or
-re-paying for anything already done.
+re-doing anything already done. Genuinely free on the Developer API's free
+tier (rate-limited, not billed) — expect it to pace itself around those
+limits rather than run instantly.
 
 ### 6. Run the app
 
@@ -151,15 +162,6 @@ chain, scored by DeepEval using Gemini as the judge):
 uv run python -m rag_ncert_biology_teacher.eval.run_eval
 ```
 
-Latest results:
-
-| Metric | Avg Score | Pass Rate |
-|---|---|---|
-| Faithfulness | 0.98 | 100% |
-| Answer Relevancy | 0.95 | 100% |
-| Contextual Precision | 0.92 | 100% |
-| Contextual Recall | 0.93 | 80% |
-
 ## Project structure
 
 ```
@@ -173,15 +175,16 @@ src/rag_ncert_biology_teacher/
 │   └── chunking.py         # page text + captions → retrieval-sized chunks
 ├── image_handling/         # the 3 independent image-retrieval approaches + combined pipeline
 ├── indexing/
-│   ├── embeddings.py       # Vertex AI text + multimodal embedding wrappers
+│   ├── embeddings.py       # Gemini Developer API text + image embedding wrappers (one unified model)
 │   ├── vectorstore.py      # Chroma persistence
 │   └── indexer.py          # SQLRecordManager incremental indexing
 ├── rag/
 │   ├── retriever.py         # thin Chroma similarity-search wrapper
 │   ├── prompts.py           # teacher-persona system prompt, marker parsing
 │   └── chain.py              # retrieval + generation, streaming, conversation memory
+├── bootstrap.py            # optional: downloads a pre-built index from GCS at startup (deploy-only)
 └── eval/
-    ├── gemini_judge.py      # DeepEval judge model (Gemini via Vertex AI)
+    ├── gemini_judge.py      # DeepEval judge model (Gemini, free API key)
     └── run_eval.py           # the evaluation script above
 
 app/                        # Flask web UI (server.py, templates/, static/)
@@ -194,74 +197,40 @@ data/chroma/                  # generated: the vector database (not tracked, reg
 ## Deployment (Render)
 
 The Flask app is a standard WSGI app (`gunicorn app.server:app`, reads
-`$PORT`), but two things need real attention before it'll work on Render or
-any similar PaaS -- both are about things that are true and necessary on
-your own machine but don't exist by default on a fresh container:
+`$PORT`). Auth is trivial now — no service account, no IAM roles, no cloud
+billing setup: just set the same `GEMINI_API_KEY` env var Render as any
+other config value.
 
-**1. Auth.** Locally this project authenticates via
-`gcloud auth application-default login` -- your own interactive Google
-login. A Render container can't do that. Instead:
-1. GCP Console → IAM & Admin → Service Accounts → create one, grant it the
-   **Vertex AI User** role (`roles/aiplatform.user`).
-2. Create a JSON key for it, download it.
-3. In Render: your service → Environment → **Secret Files** → add the key's
-   contents as a file (e.g. path `/etc/secrets/gcp-key.json`).
-4. Add an env var `GOOGLE_APPLICATION_CREDENTIALS=/etc/secrets/gcp-key.json`
-   -- `google-genai`'s Vertex AI client picks this up automatically.
+**The one real thing to solve: data.** `data/raw_pdfs/*.pdf`,
+`data/extracted/`, `data/chroma/`, and `data/record_manager.sqlite3` are all
+git-ignored on purpose (large and/or regenerable) — so a fresh `git`-based
+deploy won't have them, and a PaaS's container filesystem is otherwise
+wiped on every redeploy (and, on a free tier with no persistent disk, on
+every cold start too). Three ways to solve that:
 
-**2. Data.** `data/raw_pdfs/*.pdf`, `data/extracted/`, `data/chroma/`, and
-`data/record_manager.sqlite3` are all git-ignored on purpose (large and/or
-regenerable) -- which also means a fresh `git`-based deploy won't have them,
-and a PaaS's container filesystem is otherwise wiped on every redeploy (and,
-on a free tier with no persistent disk, on every cold start too). The
-chatbot can't answer anything without the already-built index, so this data
-has to come from somewhere at startup. Two ways to solve that -- pick one:
+- **Rebuild directly on the server** (simplest now that it's free): upload
+  the raw PDFs however you like, then run
+  `uv run python scripts/index_all_chapters.py` once after deploying. No
+  cost beyond the free tier's rate limits, since captioning/embedding no
+  longer needs paid Vertex AI calls.
+- **Paid tier with a persistent disk**: add a Render disk, set `DATA_DIR` to
+  its mount path, and copy your already-built `data/` folder onto it once
+  (e.g. via Render's Shell + any storage you have access to).
+- **Free tier, download at every cold start** (what `bootstrap.py`
+  implements): downloads a pre-built `data/chroma/` + `data/extracted/` +
+  `record_manager.sqlite3` from a GCS bucket on startup — entirely optional,
+  unrelated to the AI features, and skippable if you'd rather not touch GCP
+  at all (see `.env.example`'s `GCS_DATA_BUCKET` comment for the full
+  tradeoff). Leave it unset to skip this path entirely.
 
-- **Paid tier with a persistent disk** (simplest, no re-download ever):
-  1. Render → your service → **Disks** → add a disk (1-2 GB is plenty --
-     the built index is under 50 MB), mounted at a path of your choice,
-     e.g. `/var/data`.
-  2. Set the env var `DATA_DIR=/var/data` (see `.env.example`) -- everything
-     in `config.py` resolves from this instead of `<repo>/data`.
-  3. Get your already-built `data/` folder onto that disk **once**: upload
-     it to a GCS bucket you own, then from Render's Shell,
-     `gcloud storage cp -r gs://your-bucket/data/* /var/data/`. It persists
-     across redeploys after that.
-
-- **Free tier, download at every cold start** (what this repo actually
-  implements, via `bootstrap.py`): Render's Free tier has no Disks/Shell at
-  all, so there's nowhere to put a one-time copy. Instead, `app/server.py`
-  calls `bootstrap.ensure_data_present()` on startup, which downloads the
-  built index (`data/chroma/` + `data/extracted/` +
-  `record_manager.sqlite3` -- ~30MB, **not** the ~160MB raw PDFs, which are
-  only used for decorative thumbnails and skipped gracefully if absent)
-  from a GCS bucket, in parallel, taking roughly 30-60s on a cold start.
-  1. Upload your local `data/` folder once: `gcloud storage cp -r data
-     gs://your-bucket/`.
-  2. Grant your service account read access:
-     `gcloud storage buckets add-iam-policy-binding gs://your-bucket
-     --member="serviceAccount:YOUR_SA@..." --role="roles/storage.objectViewer"`.
-  3. Set the env var `GCS_DATA_BUCKET=your-bucket` (see `.env.example`).
-     Leave `DATA_DIR` unset -- the default `<repo>/data` inside the
-     container is fine since it's ephemeral either way.
-  4. If the service ever cold-starts before the disk-based flow above is
-     wired up, `ensure_data_present()` is a no-op locally (unset
-     `GCS_DATA_BUCKET`) and idempotent per-boot (skips re-downloading if
-     `data/chroma/` already has files, e.g. a gunicorn worker restart
-     within an already-warm container).
-
-**Then set up the service itself:**
+**Service setup:**
 - New → Web Service → connect this GitHub repo
 - Environment: Python, with env var `PYTHON_VERSION=3.13.1` (or newer 3.13.x)
 - Build command: `pip install uv && uv sync --frozen`
 - Start command: `uv run gunicorn --bind 0.0.0.0:$PORT app.server:app`
-- Environment variables: everything in `.env.example`
-  (`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GEMINI_CAPTIONING_MODEL`,
-  `MULTIMODAL_EMBEDDING_MODEL_NAME`, `MULTIMODAL_EMBEDDING_LOCATION`,
-  `LLM_PROVIDER`, `LLM_MODEL`) plus `GOOGLE_APPLICATION_CREDENTIALS` from
-  the Auth section above, and either `DATA_DIR` or `GCS_DATA_BUCKET`
-  depending on which Data option you picked
+- Environment variables: `GEMINI_API_KEY`, `GEMINI_CAPTIONING_MODEL`,
+  `LLM_PROVIDER`, `LLM_MODEL` (see `.env.example`), plus `DATA_DIR` or
+  `GCS_DATA_BUCKET` depending on which data option you picked above
 
-Running locally is unaffected by any of this -- `DATA_DIR`,
-`GCS_DATA_BUCKET`, and `GOOGLE_APPLICATION_CREDENTIALS` are all optional and
-only need setting in production.
+Running locally is unaffected by any of this — `DATA_DIR` and
+`GCS_DATA_BUCKET` are both optional and only need setting in production.

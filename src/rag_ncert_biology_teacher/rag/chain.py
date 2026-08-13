@@ -66,13 +66,7 @@ import json
 
 from google import genai
 
-from rag_ncert_biology_teacher.config import (
-    EXTRACTED_DIR,
-    GOOGLE_CLOUD_LOCATION,
-    GOOGLE_CLOUD_PROJECT,
-    LLM_MODEL,
-    RAW_PDF_DIR,
-)
+from rag_ncert_biology_teacher.config import EXTRACTED_DIR, GEMINI_API_KEY, LLM_MODEL, RAW_PDF_DIR
 from rag_ncert_biology_teacher.indexing.embeddings import embed_texts
 from rag_ncert_biology_teacher.rag.prompts import (
     TEACHER_SYSTEM_PROMPT,
@@ -98,10 +92,15 @@ def _get_chapter_list_block() -> str:
 
 
 def get_client() -> genai.Client:
-    """Lazily create the Vertex AI client once, reused for every ask() call."""
+    """Lazily create the client once, reused for every ask() call."""
     global _client
     if _client is None:
-        _client = genai.Client(vertexai=True, project=GOOGLE_CLOUD_PROJECT, location=GOOGLE_CLOUD_LOCATION)
+        if not GEMINI_API_KEY:
+            raise RuntimeError(
+                "GEMINI_API_KEY is not set. Get a free key at "
+                "https://aistudio.google.com/apikey and add it to .env."
+            )
+        _client = genai.Client(api_key=GEMINI_API_KEY)
     return _client
 
 

@@ -60,7 +60,7 @@ from rag_ncert_biology_teacher.indexing.embeddings import embed_texts
 COLLECTION_NAME = "ncert_biology"
 
 
-class VertexAIEmbeddings(Embeddings):
+class GeminiEmbeddings(Embeddings):
     """Adapts Step 4's embed_texts() to the Embeddings interface Chroma/LangChain expect."""
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
@@ -74,7 +74,7 @@ def get_vectorstore() -> Chroma:
     """Open (or create) the persisted Chroma collection at CHROMA_DIR."""
     return Chroma(
         collection_name=COLLECTION_NAME,
-        embedding_function=VertexAIEmbeddings(),
+        embedding_function=GeminiEmbeddings(),
         persist_directory=str(CHROMA_DIR),
     )
 

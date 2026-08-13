@@ -3,9 +3,9 @@ WHAT
 ----
 Approach 2 of 3 for handling images in this RAG pipeline: embed each
 extracted image's raw PIXELS directly into a joint image+text vector space
-(gemini-embedding-2), using Vertex AI's multimodal embedding model. There is
-no caption step and no text description anywhere in this file - pixels go
-in, a vector comes out.
+(gemini-embedding-2, via the Gemini Developer API). There is no caption step
+and no text description anywhere in this file - pixels go in, a vector
+comes out.
 
 WHY
 ---
@@ -62,7 +62,7 @@ def build_image_index(book: str, chapter_key: str, cache_path: Path | None = Non
     """Embed every extracted image's raw pixels (no captioning involved).
 
     cache_path (optional): a .npz file to save/load (image_paths, vectors) -
-    these Vertex AI calls are both rate-limited and the slowest step in this
+    these API calls are both rate-limited and the slowest step in this
     project, so caching matters even more here than for captions.
 
     RESUMABLE by design, same reasoning as build_caption_index(): progress
@@ -95,7 +95,7 @@ def build_image_index(book: str, chapter_key: str, cache_path: Path | None = Non
             print(f"  {image_path.name}: embedded -> vector length {len(vector)}")
             time.sleep(1)  # stay gentle on the per-minute quota
     else:
-        print(f"Loaded {len(vectors)} cached image embeddings from {cache_path} (skipping Vertex AI calls)")
+        print(f"Loaded {len(vectors)} cached image embeddings from {cache_path} (skipping API calls)")
 
     return image_paths, np.array(vectors) if vectors else np.zeros((0, _EMBEDDING_DIM))
 

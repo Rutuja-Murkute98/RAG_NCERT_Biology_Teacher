@@ -1,6 +1,6 @@
 """Turn each extracted diagram/photo into a text caption, using Gemini
-(via Vertex AI) - so a figure becomes findable by normal text search too,
-not just by looking at it.
+(via the Gemini Developer API) - so a figure becomes findable by normal
+text search too, not just by looking at it.
 
 Unlike the reference implementation this project started from (which
 rendered and captioned whole PDF pages, to sidestep diagrams built from many
@@ -10,9 +10,8 @@ a single, complete diagram or photo, precisely cropped, with no surrounding
 page text or unrelated figures mixed in. So captioning here runs directly on
 those files; there is no separate "render whole page" step to build first.
 
-Auth: Application Default Credentials (`gcloud auth application-default
-login`) - no API key file needed, only GOOGLE_CLOUD_PROJECT/LOCATION from
-config.py (verified working in Step 1).
+Auth: a free API key (GEMINI_API_KEY, config.py) from
+https://aistudio.google.com/apikey - not tied to any GCP project's billing.
 """
 
 from pathlib import Path
@@ -20,11 +19,7 @@ from pathlib import Path
 from google import genai
 from google.genai import types
 
-from rag_ncert_biology_teacher.config import (
-    GEMINI_CAPTIONING_MODEL,
-    GOOGLE_CLOUD_LOCATION,
-    GOOGLE_CLOUD_PROJECT,
-)
+from rag_ncert_biology_teacher.config import GEMINI_API_KEY, GEMINI_CAPTIONING_MODEL
 from rag_ncert_biology_teacher.retry_utils import call_with_retry
 
 CAPTION_PROMPT = (
@@ -58,12 +53,15 @@ _client: genai.Client | None = None
 
 
 def _get_client() -> genai.Client:
-    """Lazily create the Vertex AI client once, and reuse it after that."""
+    """Lazily create the client once, and reuse it after that."""
     global _client
     if _client is None:
-        if not GOOGLE_CLOUD_PROJECT:
-            raise RuntimeError("GOOGLE_CLOUD_PROJECT is not set -- add it to your .env file.")
-        _client = genai.Client(vertexai=True, project=GOOGLE_CLOUD_PROJECT, location=GOOGLE_CLOUD_LOCATION)
+        if not GEMINI_API_KEY:
+            raise RuntimeError(
+                "GEMINI_API_KEY is not set. Get a free key at "
+                "https://aistudio.google.com/apikey and add it to .env."
+            )
+        _client = genai.Client(api_key=GEMINI_API_KEY)
     return _client
 
 
@@ -101,7 +99,7 @@ if __name__ == "__main__":
         base / "chapter_02" / "images" / "page_012_diagram_0.png",  # raster-fragment cluster
     ]
 
-    print(f"Model: {GEMINI_CAPTIONING_MODEL} (Vertex AI, project={GOOGLE_CLOUD_PROJECT})\n")
+    print(f"Model: {GEMINI_CAPTIONING_MODEL} (Gemini Developer API)\n")
     for image_path in sample_images:
         if not image_path.exists():
             print(f"{image_path.name}: SKIPPED (file not found)")

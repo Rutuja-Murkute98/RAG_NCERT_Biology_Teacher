@@ -51,7 +51,7 @@ import fitz  # PyMuPDF
 from flask import Flask, Response, render_template, request, send_file
 
 from rag_ncert_biology_teacher.bootstrap import ensure_data_present
-from rag_ncert_biology_teacher.config import EXTRACTED_DIR, GOOGLE_CLOUD_PROJECT, RAW_PDF_DIR
+from rag_ncert_biology_teacher.config import EXTRACTED_DIR, GEMINI_API_KEY, RAW_PDF_DIR
 from rag_ncert_biology_teacher.ingestion.pdf_loader import render_page_thumbnail
 from rag_ncert_biology_teacher.rag.chain import ask_stream
 
@@ -80,10 +80,10 @@ _EXTRACTED_ROOT = EXTRACTED_DIR.resolve()
 # Fail fast and clearly at startup, not with a deep, confusing traceback from
 # inside chain.py on the FIRST chat request -- runs at import time (not just
 # under `if __name__ == "__main__"`) so it also covers `gunicorn app.server:app`.
-if not GOOGLE_CLOUD_PROJECT:
+if not GEMINI_API_KEY:
     raise RuntimeError(
-        "GOOGLE_CLOUD_PROJECT is not set. Copy .env.example to .env and fill in your GCP "
-        "project id (see README.md's Setup section) before starting this app."
+        "GEMINI_API_KEY is not set. Get a free key at https://aistudio.google.com/apikey "
+        "and add it to .env (see README.md's Setup section) before starting this app."
     )
 
 

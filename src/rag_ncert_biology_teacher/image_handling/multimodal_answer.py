@@ -52,7 +52,7 @@ from pathlib import Path
 from google import genai
 from google.genai import types
 
-from rag_ncert_biology_teacher.config import GEMINI_CAPTIONING_MODEL, GOOGLE_CLOUD_LOCATION, GOOGLE_CLOUD_PROJECT
+from rag_ncert_biology_teacher.config import GEMINI_API_KEY, GEMINI_CAPTIONING_MODEL
 from rag_ncert_biology_teacher.image_handling.caption_retrieval import build_caption_index, retrieve
 from rag_ncert_biology_teacher.retry_utils import call_with_retry
 
@@ -69,10 +69,15 @@ _client: genai.Client | None = None
 
 
 def get_client() -> genai.Client:
-    """Lazily create the Vertex AI client once, reused for every answer call."""
+    """Lazily create the client once, reused for every answer call."""
     global _client
     if _client is None:
-        _client = genai.Client(vertexai=True, project=GOOGLE_CLOUD_PROJECT, location=GOOGLE_CLOUD_LOCATION)
+        if not GEMINI_API_KEY:
+            raise RuntimeError(
+                "GEMINI_API_KEY is not set. Get a free key at "
+                "https://aistudio.google.com/apikey and add it to .env."
+            )
+        _client = genai.Client(api_key=GEMINI_API_KEY)
     return _client
 
 

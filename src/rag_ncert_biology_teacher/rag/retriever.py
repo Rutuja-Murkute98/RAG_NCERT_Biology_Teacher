@@ -19,8 +19,8 @@ FLOW
   1. Open the persisted Chroma collection (get_vectorstore(), Step 6).
   2. retrieve_with_scores(question, k) -> vectorstore.similarity_search_with_relevance_scores() --
      embeds the question with the SAME model used to embed every chunk
-     (Step 4's text-embedding-005, enforced by vectorstore.py's
-     VertexAIEmbeddings adapter), so the comparison is meaningful.
+     (Step 4's gemini-embedding-2, enforced by vectorstore.py's
+     GeminiEmbeddings adapter), so the comparison is meaningful.
   3. Return (Document, relevance_score) pairs -- chain.py uses these scores
      only loosely (see prompts.py's WHY for why NOT as a hard threshold).
 
