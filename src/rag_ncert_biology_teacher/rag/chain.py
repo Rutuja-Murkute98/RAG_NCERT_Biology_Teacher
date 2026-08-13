@@ -206,6 +206,18 @@ def select_best_image_path(question: str, chunks) -> str | None:
     return candidates[best_index][0]
 
 
+# How many chunks to consider as IMAGE candidates -- deliberately wider than
+# the k=4 default used for the text answer's own context. A page's dedicated
+# diagram can rank just outside the tight top-4 window even when it's
+# clearly the right image, because the CHUNK that carries it is often mostly
+# a folded-in figure caption (chunking.py), not dense explanatory prose --
+# found for real asking "explain the process of spermatogenesis": the
+# correct diagram's chunk ranked 8th by retrieval score, comfortably outside
+# k=4, while several chunks about the SAME topic but without that image
+# ranked higher.
+_IMAGE_CANDIDATE_K = 15
+
+
 def ask_stream(
     question: str,
     history: list[tuple[str, str]] | None = None,
@@ -220,6 +232,29 @@ def ask_stream(
     """
     scored_chunks = retrieve_with_scores(question, k=k, chapter_number=chapter_number)
     chunks = [chunk for chunk, _score in scored_chunks]
+
+    # Widen the IMAGE candidate pool, but ONLY within chapter(s) the tight
+    # top-k already established as relevant -- NOT a flat book-wide search.
+    # An earlier version of this widened across the whole book and broke for
+    # real: asking about the menstrual cycle pulled in a Copper T photo from
+    # a totally different chapter, whose own chunk barely scraped into a
+    # book-wide k=15 (rank 12, a genuinely weak match), yet its caption
+    # scored HIGHEST in the re-ranking below purely on reproductive-health
+    # vocabulary overlap ("uterus" etc.), not real relevance --
+    # select_best_image_path()'s caption re-ranking is good at picking
+    # correctly AMONG legitimately relevant candidates (proven by the Copper
+    # T/condom same-page fix), but that's not the same as being safe to feed
+    # it a candidate from an unrelated chapter that only looks relevant on
+    # thin vocabulary overlap. Restricting the widened search to chapters
+    # ALREADY confirmed relevant by the top-k keeps catching same-chapter
+    # near-misses (the spermatogenesis case above) without that failure mode.
+    relevant_chapters = (
+        {chapter_number} if chapter_number is not None else {c.metadata["chapter_number"] for c in chunks}
+    )
+    image_candidate_chunks = list(chunks)
+    for ch in relevant_chapters:
+        image_candidate_chunks += [c for c, _score in retrieve_with_scores(question, k=_IMAGE_CANDIDATE_K, chapter_number=ch)]
+
     context = format_context(chunks) if chunks else "(No relevant content was retrieved.)"
     history_block = format_history(history or [])
     prompt = TEACHER_SYSTEM_PROMPT.format(
@@ -245,9 +280,14 @@ def ask_stream(
     # GROUNDED: no (a greeting/small talk) -> no citations, no image, even
     # though we DID retrieve chunks (that's fine -- retrieval is cheap;
     # what matters is not showing sources for a reply that never used them).
+    # "sources" shown to the student stay the TIGHT top-k actually used in
+    # the prompt -- but image selection draws from the WIDER pool
+    # (image_candidate_chunks, see _IMAGE_CANDIDATE_K above), since the
+    # right diagram's chunk doesn't have to be one of the chunks that made
+    # the cut for the text answer itself.
     shown_chunks = chunks if grounded else []
     best_image_path = (
-        select_best_image_path(question, shown_chunks) if (show_image and grounded) else None
+        select_best_image_path(question, image_candidate_chunks) if (show_image and grounded) else None
     )
     yield "meta", {
         "chunks": shown_chunks,
