@@ -70,7 +70,7 @@ EXAMPLE_QUESTIONS = [
     "How does tubal ligation work?",
     "What is natural selection?",
     "How does a biogas plant work?",
-    "What is the Copper T (CuT) and how does it work?",
+    "What is the Copper T (CuT)?",
 ]
 
 app = Flask(__name__)
