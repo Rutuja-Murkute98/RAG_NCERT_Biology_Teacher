@@ -1,21 +1,28 @@
 """Shared retry-with-backoff helper for every Google API call in this project.
 
 Every module here (captioning, embeddings, chat) goes through the same
-google-genai SDK, but THREE different things can go wrong on any single call:
+google-genai SDK, but SEVERAL different things can go wrong on any single call:
   1. A rate limit - google-genai raises `google.genai.errors.ClientError`
      with `.code == 429`. Calling Gemini in a tight loop (one call per page,
      across 13 chapters) reliably hits the per-minute quota, not just under
      heavy load.
-  2. A plain network blip during the actual API call - `httpx.TransportError`
+  2. Google's own servers being transiently overloaded - `ClientError`/
+     `ServerError` with `.code` in the 500s (503 Service Unavailable, seen
+     for real in production: a plain student question like "explain DNA"
+     hit a 503 with no retry, surfacing as a generic "Something went wrong"
+     error even though the SAME question worked moments later). This is
+     Google's problem for a few seconds, not a real failure worth crashing
+     the whole request over.
+  3. A plain network blip during the actual API call - `httpx.TransportError`
      (connection reset/aborted/timed out).
-  3. A network blip during OAuth TOKEN REFRESH specifically -
+  4. A network blip during OAuth TOKEN REFRESH specifically -
      `google.auth.exceptions.TransportError`. This uses a completely
      different HTTP stack (the `requests`/`urllib3` libraries, not `httpx`),
-     so it doesn't get caught by #2's check even though it's the same kind
+     so it doesn't get caught by #3's check even though it's the same kind
      of problem - found for real when a long unattended indexing run's
      machine went to sleep and woke up with DNS not yet available, crashing
      the run with an uncaught error type instead of retrying.
-All three are worth automatically retrying; none is worth crashing the
+All four are worth automatically retrying; none is worth crashing the
 whole run over. Written once here instead of duplicated in every caller.
 
 "Exponential backoff" means each retry waits longer than the last (10s,
@@ -28,11 +35,17 @@ import time
 
 import httpx
 from google.auth.exceptions import TransportError as GoogleAuthTransportError
-from google.genai.errors import ClientError
+from google.genai.errors import APIError
+
+_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 def _is_retryable_error(exc: Exception) -> bool:
-    if isinstance(exc, ClientError) and getattr(exc, "code", None) == 429:
+    # APIError covers both ClientError (4xx) and ServerError (5xx) -- one
+    # check for both, since 429 (our fault, too many requests) and 503
+    # (Google's fault, temporarily overloaded) are both worth the same
+    # retry-with-backoff treatment.
+    if isinstance(exc, APIError) and getattr(exc, "code", None) in _RETRYABLE_STATUS_CODES:
         return True
     if isinstance(exc, httpx.TransportError):
         return True
