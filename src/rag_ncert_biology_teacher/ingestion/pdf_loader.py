@@ -271,12 +271,57 @@ def _render_page_worker(
     result_queue.put(saved_paths)
 
 
+def _render_fallback_region(pdf_path: str, page_number: int, images_dir: str) -> str | None:
+    """Last-resort capture for a page whose precise per-diagram detection timed
+    out (get_drawings() hanging, see PAGE_TIMEOUT_SECONDS) -- deliberately does
+    NOT call get_drawings() at all, so it can't hang the same way. get_text()
+    is a fundamentally simpler, safe PyMuPDF codepath (confirmed directly: ran
+    fine on the exact page whose get_drawings() call hung), so this uses TEXT
+    BLOCK positions instead of vector-path analysis to crop reasonably tightly:
+    NCERT consistently captions a diagram with a "Figure N.N ..." line right
+    below it, with body paragraph text starting only after that -- cropping
+    down to just past that caption line (not the whole rest of the page)
+    excludes the following paragraph text that a fixed-margin crop would
+    otherwise include.
+
+    Still not as precisely cropped as the normal per-diagram path -- it can
+    include a bit of header trim or an adjacent element -- but the
+    alternative for a timed-out page was previously nothing at all. Found for
+    real: chapter 2 page 9's menstrual cycle hormone/cycle-events chart
+    (Figure 2.9) timed out during normal extraction and was silently
+    skipped, so the single most relevant diagram for "what is the menstrual
+    cycle" never existed anywhere in the index -- no amount of retrieval
+    tuning could ever have surfaced it.
+    """
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc[page_number - 1]
+        rect = page.rect
+        top_margin = 55.0  # skips NCERT's running header (logo + "BIOLOGY")
+        bottom = rect.y1 - 15.0  # default: just trims the footer
+
+        blocks = page.get_text("blocks")
+        for x0, y0, x1, y1, text, *_ in blocks:
+            stripped = text.strip()
+            if y0 > top_margin and stripped.lower().startswith("figure"):
+                bottom = min(bottom, y1 + 10.0)
+                break  # the first one below the header is the diagram's own caption
+
+        clip = fitz.Rect(rect.x0, top_margin, rect.x1, bottom)
+        pixmap = page.get_pixmap(dpi=REGION_RENDER_DPI, clip=clip)
+        image_path = Path(images_dir) / f"page_{page_number:03d}_fallback_0.png"
+        image_path.write_bytes(pixmap.tobytes("png"))
+        return str(image_path)
+    finally:
+        doc.close()
+
+
 def _render_pages_parallel(
     pdf_path: Path, page_numbers: list[int], images_dir: Path
-) -> tuple[dict[int, list[str]], int]:
+) -> tuple[dict[int, list[str]], list[int]]:
     ctx = mp.get_context("spawn")
     results: dict[int, list[str]] = {}
-    timed_out = 0
+    timed_out_pages: list[int] = []
     pending = list(page_numbers)
 
     while pending:
@@ -301,8 +346,11 @@ def _render_pages_parallel(
             if process.is_alive():
                 process.terminate()
                 process.join()
-                timed_out += 1
-                print(f"  [warning] page {page_number}: diagram check timed out, skipped", flush=True)
+                timed_out_pages.append(page_number)
+                print(f"  [warning] page {page_number}: diagram check timed out, using fallback capture", flush=True)
+                fallback_path = _render_fallback_region(str(pdf_path), page_number, str(images_dir))
+                if fallback_path:
+                    results[page_number] = [fallback_path]
                 continue
 
             queue = queues[page_number]
@@ -310,7 +358,7 @@ def _render_pages_parallel(
             if result:
                 results[page_number] = result
 
-    return results, timed_out
+    return results, timed_out_pages
 
 
 def load_pdf(relative_pdf_path: str) -> tuple[list[PageContent], ChapterStats]:
@@ -354,10 +402,10 @@ def load_pdf(relative_pdf_path: str) -> tuple[list[PageContent], ChapterStats]:
         pages.append(PageContent(page_number=page_number, text=text, image_paths=image_paths))
     doc.close()
 
-    diagram_results, timed_out = _render_pages_parallel(pdf_path, page_numbers, images_dir)
+    diagram_results, timed_out_pages = _render_pages_parallel(pdf_path, page_numbers, images_dir)
     stats.vector_pages_with_diagrams = len(diagram_results)
     stats.vector_regions_extracted = sum(len(paths) for paths in diagram_results.values())
-    stats.vector_pages_timed_out = timed_out
+    stats.vector_pages_timed_out = len(timed_out_pages)
     stats.total_pages = len(pages)
 
     pages_by_number = {page.page_number: page for page in pages}
