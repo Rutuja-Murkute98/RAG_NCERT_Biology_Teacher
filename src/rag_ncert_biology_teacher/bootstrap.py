@@ -34,6 +34,16 @@ re-download anything.
 
 Downloads happen in parallel (ThreadPoolExecutor) -- sequential per-file GCS
 calls for ~800 small files would otherwise noticeably lengthen the delay.
+
+AUTH: uses an ANONYMOUS client, deliberately, not the default authenticated
+one. storage.Client() (no args) tries Application Default Credentials --
+fine on a local machine with `gcloud auth login`, but Render's container has
+no gcloud, no service account, nothing -- found for real, crashed the app at
+import time with DefaultCredentialsError. The whole point of migrating this
+project off Vertex AI was to stop needing any GCP credential on the deploy
+host at all, so the fix isn't to bring a service account key back -- it's to
+make the bucket's objects public (read-only, non-sensitive textbook content)
+and use create_anonymous_client(), which needs no credentials whatsoever.
 """
 
 import os
@@ -56,7 +66,7 @@ def ensure_data_present() -> None:
     from google.cloud import storage
 
     print(f"[bootstrap] No local index found -- downloading from gs://{bucket_name}/data/ ...")
-    client = storage.Client()
+    client = storage.Client.create_anonymous_client()
     bucket = client.bucket(bucket_name)
 
     def _download(blob) -> None:
