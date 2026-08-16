@@ -66,10 +66,13 @@ ensure_data_present()
 
 # TEMPORARY diagnostic -- retrieval was returning 0 chunks for every
 # question on the live Render deploy despite the exact same code+data
-# reproducing correctly on a local machine. Checking what's ACTUALLY on
-# disk and what Chroma itself thinks it has, right at boot, to pin down
-# whether the download/extract genuinely worked or Chroma just isn't
-# reading it -- remove once the real cause is found.
+# reproducing correctly on a local machine. This checks ONLY the
+# filesystem (no Chroma client instantiation here) -- an earlier version
+# of this also called get_vectorstore() at import time, which likely
+# caused a SEPARATE regression (every request, including plain greetings,
+# started failing) by creating a second SQLite-backed Chroma connection
+# before the real per-request one ever opens. Remove once the real cause
+# of the 0-chunks issue is found.
 try:
     from rag_ncert_biology_teacher.config import CHROMA_DIR, DATA_DIR
 
@@ -79,9 +82,6 @@ try:
         for p in sorted(CHROMA_DIR.rglob("*")):
             if p.is_file():
                 print(f"[diag]   {p.relative_to(CHROMA_DIR)} ({p.stat().st_size} bytes)")
-    from rag_ncert_biology_teacher.indexing.vectorstore import get_vectorstore
-
-    print(f"[diag] Chroma collection count={get_vectorstore()._collection.count()}")
 except Exception as diag_exc:
     print(f"[diag] diagnostic block itself failed: {diag_exc!r}")
 
