@@ -263,6 +263,21 @@ def ask_stream(
     # returned in production, so this pins that down directly instead of
     # guessing further -- remove once the real cause is found.
     print(f"[diag] retrieved {len(chunks)} chunks for {question!r}; context chars={len(context)}")
+    if not chunks:
+        # 0 chunks for EVERY question (even "Hello") points at the Chroma
+        # collection being genuinely empty, not just "no good match" --
+        # similarity search returns the closest documents regardless of
+        # how weak the match is, so if there were ANY documents at all,
+        # even a bad query should still return something. Confirming that
+        # directly here, safely (per-request, wrapped, not at import time --
+        # an earlier import-time version of this kind of check caused a
+        # real regression where even greetings started failing).
+        try:
+            from rag_ncert_biology_teacher.indexing.vectorstore import get_vectorstore
+
+            print(f"[diag] Chroma collection count={get_vectorstore()._collection.count()}")
+        except Exception as diag_exc:
+            print(f"[diag] collection count check itself failed: {diag_exc!r}")
     history_block = format_history(history or [])
     prompt = TEACHER_SYSTEM_PROMPT.format(
         context=context,
