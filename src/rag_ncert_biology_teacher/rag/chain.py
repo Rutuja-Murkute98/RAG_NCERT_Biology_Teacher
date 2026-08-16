@@ -256,28 +256,6 @@ def ask_stream(
         image_candidate_chunks += [c for c, _score in retrieve_with_scores(question, k=_IMAGE_CANDIDATE_K, chapter_number=ch)]
 
     context = format_context(chunks) if chunks else "(No relevant content was retrieved.)"
-    # TEMPORARY diagnostic -- every real question was coming back "ungrounded"
-    # on the live Render deploy (sources: [] for genuinely on-topic biology
-    # questions), but the exact same code+data reproduced correctly on a
-    # local machine. No existing log line showed WHAT retrieval actually
-    # returned in production, so this pins that down directly instead of
-    # guessing further -- remove once the real cause is found.
-    print(f"[diag] retrieved {len(chunks)} chunks for {question!r}; context chars={len(context)}")
-    if not chunks:
-        # 0 chunks for EVERY question (even "Hello") points at the Chroma
-        # collection being genuinely empty, not just "no good match" --
-        # similarity search returns the closest documents regardless of
-        # how weak the match is, so if there were ANY documents at all,
-        # even a bad query should still return something. Confirming that
-        # directly here, safely (per-request, wrapped, not at import time --
-        # an earlier import-time version of this kind of check caused a
-        # real regression where even greetings started failing).
-        try:
-            from rag_ncert_biology_teacher.indexing.vectorstore import get_vectorstore
-
-            print(f"[diag] Chroma collection count={get_vectorstore()._collection.count()}")
-        except Exception as diag_exc:
-            print(f"[diag] collection count check itself failed: {diag_exc!r}")
     history_block = format_history(history or [])
     prompt = TEACHER_SYSTEM_PROMPT.format(
         context=context,

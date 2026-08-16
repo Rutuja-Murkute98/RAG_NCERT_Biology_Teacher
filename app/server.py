@@ -64,27 +64,6 @@ logger = logging.getLogger(__name__)
 # populates the index before the first request arrives. See bootstrap.py.
 ensure_data_present()
 
-# TEMPORARY diagnostic -- retrieval was returning 0 chunks for every
-# question on the live Render deploy despite the exact same code+data
-# reproducing correctly on a local machine. This checks ONLY the
-# filesystem (no Chroma client instantiation here) -- an earlier version
-# of this also called get_vectorstore() at import time, which likely
-# caused a SEPARATE regression (every request, including plain greetings,
-# started failing) by creating a second SQLite-backed Chroma connection
-# before the real per-request one ever opens. Remove once the real cause
-# of the 0-chunks issue is found.
-try:
-    from rag_ncert_biology_teacher.config import CHROMA_DIR, DATA_DIR
-
-    print(f"[diag] DATA_DIR={DATA_DIR}")
-    print(f"[diag] CHROMA_DIR={CHROMA_DIR} exists={CHROMA_DIR.exists()}")
-    if CHROMA_DIR.exists():
-        for p in sorted(CHROMA_DIR.rglob("*")):
-            if p.is_file():
-                print(f"[diag]   {p.relative_to(CHROMA_DIR)} ({p.stat().st_size} bytes)")
-except Exception as diag_exc:
-    print(f"[diag] diagnostic block itself failed: {diag_exc!r}")
-
 BOOK = "class12_biology"
 
 EXAMPLE_QUESTIONS = [

@@ -70,29 +70,13 @@ class GeminiEmbeddings(Embeddings):
         return embed_texts([text])[0].tolist()
 
 
-_vectorstore: Chroma | None = None
-
-
 def get_vectorstore() -> Chroma:
-    """Open (or create) the persisted Chroma collection at CHROMA_DIR --
-    cached after the first call so the whole process reuses ONE client
-    connection instead of opening a fresh one on every single request
-    (retriever.py calls this once per question). A fresh Chroma() object
-    every call is wasteful in general, and was under real suspicion during
-    a live production bug (retrieval consistently returning 0 results on
-    Render despite the exact same code+data reproducing correctly locally
-    every time) -- repeatedly reopening the same on-disk SQLite-backed
-    collection is exactly the kind of thing that can behave inconsistently
-    on some filesystems even when the underlying files are completely fine.
-    """
-    global _vectorstore
-    if _vectorstore is None:
-        _vectorstore = Chroma(
-            collection_name=COLLECTION_NAME,
-            embedding_function=GeminiEmbeddings(),
-            persist_directory=str(CHROMA_DIR),
-        )
-    return _vectorstore
+    """Open (or create) the persisted Chroma collection at CHROMA_DIR."""
+    return Chroma(
+        collection_name=COLLECTION_NAME,
+        embedding_function=GeminiEmbeddings(),
+        persist_directory=str(CHROMA_DIR),
+    )
 
 
 def _chunk_id(chunk: Document) -> str:
