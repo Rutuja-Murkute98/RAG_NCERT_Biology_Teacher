@@ -256,6 +256,13 @@ def ask_stream(
         image_candidate_chunks += [c for c, _score in retrieve_with_scores(question, k=_IMAGE_CANDIDATE_K, chapter_number=ch)]
 
     context = format_context(chunks) if chunks else "(No relevant content was retrieved.)"
+    # TEMPORARY diagnostic -- every real question was coming back "ungrounded"
+    # on the live Render deploy (sources: [] for genuinely on-topic biology
+    # questions), but the exact same code+data reproduced correctly on a
+    # local machine. No existing log line showed WHAT retrieval actually
+    # returned in production, so this pins that down directly instead of
+    # guessing further -- remove once the real cause is found.
+    print(f"[diag] retrieved {len(chunks)} chunks for {question!r}; context chars={len(context)}")
     history_block = format_history(history or [])
     prompt = TEACHER_SYSTEM_PROMPT.format(
         context=context,
