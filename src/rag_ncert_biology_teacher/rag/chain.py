@@ -248,12 +248,18 @@ def ask_stream(
     # thin vocabulary overlap. Restricting the widened search to chapters
     # ALREADY confirmed relevant by the top-k keeps catching same-chapter
     # near-misses (the spermatogenesis case above) without that failure mode.
-    relevant_chapters = (
-        {chapter_number} if chapter_number is not None else {c.metadata["chapter_number"] for c in chunks}
-    )
-    image_candidate_chunks = list(chunks)
-    for ch in relevant_chapters:
-        image_candidate_chunks += [c for c, _score in retrieve_with_scores(question, k=_IMAGE_CANDIDATE_K, chapter_number=ch)]
+    #
+    # PERFORMANCE: this widened search used to run HERE, unconditionally,
+    # before the answer even started generating -- meaning every question
+    # paid for an extra embedding call (sometimes several, one per distinct
+    # chapter) before the student saw a single word of the answer, even on
+    # questions that turn out not to need an image at all (SHOW_IMAGE: no)
+    # or aren't even grounded (a greeting). Moved below, after the model's
+    # own SHOW_IMAGE/GROUNDED decision is known, so it only runs when an
+    # image is actually going to be shown -- and even then, it happens
+    # AFTER the text has already started streaming to the student, not
+    # before, so it no longer adds to the most noticeable kind of latency
+    # (time to first word).
 
     context = format_context(chunks) if chunks else "(No relevant content was retrieved.)"
     history_block = format_history(history or [])
@@ -280,15 +286,26 @@ def ask_stream(
     # GROUNDED: no (a greeting/small talk) -> no citations, no image, even
     # though we DID retrieve chunks (that's fine -- retrieval is cheap;
     # what matters is not showing sources for a reply that never used them).
-    # "sources" shown to the student stay the TIGHT top-k actually used in
-    # the prompt -- but image selection draws from the WIDER pool
-    # (image_candidate_chunks, see _IMAGE_CANDIDATE_K above), since the
-    # right diagram's chunk doesn't have to be one of the chunks that made
-    # the cut for the text answer itself.
     shown_chunks = chunks if grounded else []
-    best_image_path = (
-        select_best_image_path(question, image_candidate_chunks) if (show_image and grounded) else None
-    )
+    best_image_path = None
+    if show_image and grounded:
+        # ONLY NOW do the widened, chapter-restricted image-candidate
+        # search (see the long comment above) -- deferred until we
+        # actually know an image will be shown, and happens after the
+        # text has already started reaching the student, not before.
+        # "sources" shown to the student stay the TIGHT top-k actually
+        # used in the prompt -- but image selection draws from this
+        # WIDER pool, since the right diagram's chunk doesn't have to be
+        # one of the chunks that made the cut for the text answer itself.
+        relevant_chapters = (
+            {chapter_number} if chapter_number is not None else {c.metadata["chapter_number"] for c in chunks}
+        )
+        image_candidate_chunks = list(chunks)
+        for ch in relevant_chapters:
+            image_candidate_chunks += [
+                c for c, _score in retrieve_with_scores(question, k=_IMAGE_CANDIDATE_K, chapter_number=ch)
+            ]
+        best_image_path = select_best_image_path(question, image_candidate_chunks)
     yield "meta", {
         "chunks": shown_chunks,
         "show_image": show_image and grounded,

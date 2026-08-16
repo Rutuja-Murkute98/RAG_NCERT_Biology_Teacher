@@ -98,6 +98,11 @@ body::before {
   padding: 1.1rem;
   display: flex;
   justify-content: center;
+  overflow-x: hidden; /* html/body already hide page-level overflow, but a
+                          child even slightly wider than its container (long
+                          unbroken text, an image before max-width settles)
+                          can still force a visible horizontal scrollbar --
+                          this closes that off explicitly, defensively. */
 }
 
 /* The chat interface itself: ONE strongly-highlighted card, clearly
@@ -119,6 +124,7 @@ body::before {
   border: 1px solid rgba(255, 255, 255, 0.8);
   box-shadow: 0 24px 70px rgba(6, 60, 43, 0.28), 0 2px 8px rgba(6, 60, 43, 0.12);
   animation: app-in 0.4s ease;
+  overflow-x: hidden; /* same reasoning as .app-stage above */
 }
 @keyframes app-in {
   from { opacity: 0; transform: translateY(10px); }
@@ -207,6 +213,9 @@ body::before {
   flex: 1 1 auto;
   min-height: 0; /* required for a flex child to actually scroll instead of overflowing */
   overflow-y: auto;
+  overflow-x: hidden; /* only up/down scroll was intended -- long unbroken
+                          text or an image before max-width settles could
+                          otherwise force this specific element sideways */
   padding: 0.3rem 0.2rem;
   display: flex;
   flex-direction: column;
