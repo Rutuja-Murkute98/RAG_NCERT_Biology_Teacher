@@ -182,7 +182,7 @@ src/rag_ncert_biology_teacher/
 │   ├── retriever.py         # thin Chroma similarity-search wrapper
 │   ├── prompts.py           # teacher-persona system prompt, marker parsing
 │   └── chain.py              # retrieval + generation, streaming, conversation memory
-├── bootstrap.py            # optional: downloads a pre-built index from GCS at startup (deploy-only)
+├── bootstrap.py            # optional: downloads+extracts a pre-built index zip at startup (deploy-only)
 └── eval/
     ├── gemini_judge.py      # DeepEval judge model (Gemini, free API key)
     └── run_eval.py           # the evaluation script above
@@ -217,11 +217,18 @@ every cold start too). Three ways to solve that:
   its mount path, and copy your already-built `data/` folder onto it once
   (e.g. via Render's Shell + any storage you have access to).
 - **Free tier, download at every cold start** (what `bootstrap.py`
-  implements): downloads a pre-built `data/chroma/` + `data/extracted/` +
-  `record_manager.sqlite3` from a GCS bucket on startup — entirely optional,
-  unrelated to the AI features, and skippable if you'd rather not touch GCP
-  at all (see `.env.example`'s `GCS_DATA_BUCKET` comment for the full
-  tradeoff). Leave it unset to skip this path entirely.
+  implements): downloads and extracts a zip of the pre-built
+  `data/chroma/` + `data/extracted/` + `record_manager.sqlite3` from a
+  direct-download URL on startup — entirely optional, unrelated to the AI
+  features. A GitHub Release asset on this repo works well for this (free,
+  public, no billing account of any kind involved — an earlier version used
+  a GCS bucket, which broke in production the moment that GCP project's
+  billing went delinquent, since Google blocks Cloud Storage downloads
+  project-wide in that state regardless of the bucket being public). Zip up
+  `data/chroma`, `data/extracted`, and `data/record_manager.sqlite3`,
+  attach it to a GitHub Release, and set `DATA_ZIP_URL` to its direct
+  download link (`.../releases/download/<tag>/<file>.zip`). Leave it unset
+  to skip this path entirely.
 
 **Service setup:**
 - New → Web Service → connect this GitHub repo
@@ -230,7 +237,7 @@ every cold start too). Three ways to solve that:
 - Start command: `uv run gunicorn --bind 0.0.0.0:$PORT app.server:app`
 - Environment variables: `GEMINI_API_KEY`, `GEMINI_CAPTIONING_MODEL`,
   `LLM_PROVIDER`, `LLM_MODEL` (see `.env.example`), plus `DATA_DIR` or
-  `GCS_DATA_BUCKET` depending on which data option you picked above
+  `DATA_ZIP_URL` depending on which data option you picked above
 
 Running locally is unaffected by any of this — `DATA_DIR` and
-`GCS_DATA_BUCKET` are both optional and only need setting in production.
+`DATA_ZIP_URL` are both optional and only need setting in production.
