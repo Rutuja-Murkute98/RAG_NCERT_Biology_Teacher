@@ -64,6 +64,27 @@ logger = logging.getLogger(__name__)
 # populates the index before the first request arrives. See bootstrap.py.
 ensure_data_present()
 
+# TEMPORARY diagnostic -- retrieval was returning 0 chunks for every
+# question on the live Render deploy despite the exact same code+data
+# reproducing correctly on a local machine. Checking what's ACTUALLY on
+# disk and what Chroma itself thinks it has, right at boot, to pin down
+# whether the download/extract genuinely worked or Chroma just isn't
+# reading it -- remove once the real cause is found.
+try:
+    from rag_ncert_biology_teacher.config import CHROMA_DIR, DATA_DIR
+
+    print(f"[diag] DATA_DIR={DATA_DIR}")
+    print(f"[diag] CHROMA_DIR={CHROMA_DIR} exists={CHROMA_DIR.exists()}")
+    if CHROMA_DIR.exists():
+        for p in sorted(CHROMA_DIR.rglob("*")):
+            if p.is_file():
+                print(f"[diag]   {p.relative_to(CHROMA_DIR)} ({p.stat().st_size} bytes)")
+    from rag_ncert_biology_teacher.indexing.vectorstore import get_vectorstore
+
+    print(f"[diag] Chroma collection count={get_vectorstore()._collection.count()}")
+except Exception as diag_exc:
+    print(f"[diag] diagnostic block itself failed: {diag_exc!r}")
+
 BOOK = "class12_biology"
 
 EXAMPLE_QUESTIONS = [
